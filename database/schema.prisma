@@ -1,0 +1,54 @@
+// database
+datasource db {
+  provider = "sqlite"
+  url      = "file:database.db"
+}
+
+// generator
+generator client {
+  provider             = "prisma-client-py"
+  recursive_type_depth = 5
+}
+
+// data models
+model Team {
+  id Int @id @unique
+  name String
+  seasons TeamsOnSeasons[]
+  winnerMatches Match[] @relation("winner")
+  homeMatches Match[] @relation("home")
+  awayMatches Match[] @relation("away")
+}
+
+model Season {
+  id Int @id @unique @default(autoincrement())
+  title String
+  shortcut String
+  year Int
+  teams TeamsOnSeasons[]
+  matches Match[]
+  @@unique([shortcut, year])
+}
+
+model TeamsOnSeasons{
+  team Team @relation(fields: [teamId], references: [id])
+  teamId Int
+  season Season @relation(fields: [seasonId], references: [id])
+  seasonId Int
+  marketValue Int?
+  @@id([teamId, seasonId])
+}
+
+model Match {
+  id Int @id @unique
+  teamHome Team @relation("home", fields: [teamHomeId], references: [id])
+  teamHomeId Int
+  teamAway Team @relation("away", fields: [teamAwayId], references: [id])
+  teamAwayId Int
+  season Season @relation(fields: [seasonId], references: [id])
+  seasonId Int
+  goalsHome Int
+  goalsAway Int
+  winnerTeam Team? @relation("winner", fields: [winnerTeamId], references: [id])
+  winnerTeamId Int?
+}
