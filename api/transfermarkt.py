@@ -32,18 +32,19 @@ def get_teams_market_value(args):
                 if "Tsd" in market_value:
                     market_value = float(re.sub("[^\d]", "", market_value)) * 1000
                 elif "Mio" in market_value:
-                    market_value = float(re.sub("[^\d]", "", market_value)) * 1000000
+                    market_value = market_value.split(",")
+                    market_value = float(re.sub("[^\d]", "", market_value[0])) * 1000000
                 total_value += market_value
             except TypeError:
                 pass
-        return total_value
+        return round(total_value / 1000000, 2)
     except IndexError:
         print(args)
-        return 10000000
+        return 1
 
 
-def get_teams_market_values_threaded(teams, year):
+def get_teams_market_values_threaded(teams_on_season):
     pool = ThreadPool(16)
-    results = pool.map(get_teams_market_value, [(x, year) for x in teams])
-    results_dict = dict(zip(teams, results))
+    results = pool.map(get_teams_market_value, [(x[1], x[2]) for x in teams_on_season])
+    results_dict = dict(zip([x[0] for x in teams_on_season], results))
     return results_dict

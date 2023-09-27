@@ -31,12 +31,13 @@ model Season {
 }
 
 model TeamsOnSeasons{
+  id Int @id @unique @default(autoincrement())
   team Team @relation(fields: [teamId], references: [id])
   teamId Int
   season Season @relation(fields: [seasonId], references: [id])
   seasonId Int
-  marketValue Int?
-  @@id([teamId, seasonId])
+  marketValue Float?
+  @@unique([teamId, seasonId])
 }
 
 model Match {
