@@ -16,7 +16,7 @@ def create_initial_dataframe():
     matches_df = pd.DataFrame(matches_list, columns=columns)
     matches_df = matches_df.fillna(0)
     matches_df["Winner Team ID"] = matches_df["Winner Team ID"].astype('int32')
-    pickle.dump(matches_df, open("database/matches_df.pck", "wb"))
+    pickle.dump(matches_df, open("../database/matches_df.pck", "wb"))
 
 def get_matches_by_team(team_id):
     team = asyncio.run(dbconn.get_matches_by_team(team_id))
