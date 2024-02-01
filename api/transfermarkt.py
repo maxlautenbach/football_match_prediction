@@ -37,10 +37,10 @@ def get_teams_market_value(args):
                 total_value += market_value
             except TypeError:
                 pass
-        return round(total_value / 1000000, 2)
+        return team, year, round(total_value / 1000000, 2)
     except IndexError:
         print(args)
-        return 1
+        return team, year, 1
 
 
 def get_teams_market_values_threaded(teams_on_season):
@@ -48,3 +48,10 @@ def get_teams_market_values_threaded(teams_on_season):
     results = pool.map(get_teams_market_value, [(x[1], x[2]) for x in teams_on_season])
     results_dict = dict(zip([x[0] for x in teams_on_season], results))
     return results_dict
+
+
+def get_teams_market_values_threaded2(teams_on_season):
+    pool = ThreadPool(16)
+    teams = [(x["teamHomeName"], x["season"]) for _, x in teams_on_season.iterrows()]
+    results = pool.map(get_teams_market_value, teams)
+    return results

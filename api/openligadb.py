@@ -12,5 +12,9 @@ def get_all_season_teams(league, season):
     body = res.json()
     return body
 
+def get_match_data(match_id):
+    res = requests.get("https://api.openligadb.de/getmatchdata/" + str(match_id))
+    body = res.json()
+    return body
 
 #print(get_all_season_teams("bl1", 2022))
