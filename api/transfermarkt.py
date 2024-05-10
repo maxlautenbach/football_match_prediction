@@ -2,6 +2,7 @@ from multiprocessing.pool import ThreadPool
 import re
 import requests as requests
 from bs4 import BeautifulSoup
+from tqdm import tqdm
 
 
 def get_teams_market_value(args):
@@ -19,8 +20,7 @@ def get_teams_market_value(args):
         # Senden des GET-Requests
         response = requests.get(url, headers=headers)
         soup = BeautifulSoup(response.content, 'html.parser')
-        link = "https://www.transfermarkt.de" + soup.findAll("td", {"class": "hauptlink"})[0].next_element[
-            "href"] + "?saison_id=" + str(year)
+        link = "https://www.transfermarkt.de" + soup.findAll("td", {"class": "hauptlink"})[0].next_element["href"] + "?saison_id=" + str(year)
         response = requests.get(link, headers=headers)
         soup = BeautifulSoup(response.content, 'html.parser')
 
@@ -53,5 +53,5 @@ def get_teams_market_values_threaded(teams_on_season):
 def get_teams_market_values_threaded2(teams_on_season):
     pool = ThreadPool(16)
     teams = [(x["teamHomeName"], x["season"]) for _, x in teams_on_season.iterrows()]
-    results = pool.map(get_teams_market_value, teams)
+    results = list(tqdm(pool.imap(get_teams_market_value, teams), total=len(teams)))
     return results
