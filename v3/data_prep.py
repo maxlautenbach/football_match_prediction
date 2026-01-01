@@ -11,6 +11,14 @@ FEATURES:
 - Single API call per season instead of individual team lookups for maximum efficiency
 - Optional filtering for BL1 only using the bl1_only parameter
 - League tracking with automatic removal from final datasets
+- Table position calculation (teamHomeRank, teamAwayRank) with chronological accuracy
+
+NEW RANKING FEATURES:
+- teamHomeRank: Table position of home team at match time (1-18, 0 if no matches played)
+- teamAwayRank: Table position of away team at match time (1-18, 0 if no matches played)
+- Rankings respect season boundaries (2024 = season 24/25) and league separation (bl1/bl2)
+- Only finished matches before the current match date are considered for ranking calculation
+- Standard Bundesliga ranking rules: Points > Goal Difference > Goals Scored
 
 The market value fetching is highly efficient as it fetches all teams for a season
 in a single API call instead of individual team lookups.
@@ -630,9 +638,113 @@ def get_market_value(team, season, market_value_dict):
     return market_value_dict[team][season]
 
 
+def calculate_team_standings(match_df, current_date, season, league):
+    """
+    Calculate team standings (table positions) up to a specific date.
+    
+    Args:
+        match_df (pd.DataFrame): Match DataFrame
+        current_date (datetime): Calculate standings up to this date
+        season (int): Season to calculate standings for
+        league (str): League identifier (bl1, bl2)
+        
+    Returns:
+        dict: Dictionary mapping team IDs to their table positions
+    """
+    # Filter matches for the specific season and league up to current_date
+    relevant_matches = match_df[
+        (match_df["season"] == season) & 
+        (match_df["league"] == league) & 
+        (match_df["status"] == "finished") & 
+        (match_df["date"] < current_date)
+    ].copy()
+    
+    if len(relevant_matches) == 0:
+        # No matches played yet, return empty dict
+        return {}
+    
+    # Initialize team statistics
+    team_stats = defaultdict(lambda: {"points": 0, "goals_for": 0, "goals_against": 0, "matches": 0})
+    
+    # Calculate points and goal difference for each team
+    for _, match in relevant_matches.iterrows():
+        home_id = match["teamHomeId"]
+        away_id = match["teamAwayId"]
+        home_goals = match["goalsHome"]
+        away_goals = match["goalsAway"]
+        
+        # Update match counts
+        team_stats[home_id]["matches"] += 1
+        team_stats[away_id]["matches"] += 1
+        
+        # Update goals
+        team_stats[home_id]["goals_for"] += home_goals
+        team_stats[home_id]["goals_against"] += away_goals
+        team_stats[away_id]["goals_for"] += away_goals
+        team_stats[away_id]["goals_against"] += home_goals
+        
+        # Update points based on match result
+        if home_goals > away_goals:  # Home win
+            team_stats[home_id]["points"] += 3
+            team_stats[away_id]["points"] += 0
+        elif home_goals < away_goals:  # Away win
+            team_stats[home_id]["points"] += 0
+            team_stats[away_id]["points"] += 3
+        else:  # Draw
+            team_stats[home_id]["points"] += 1
+            team_stats[away_id]["points"] += 1
+    
+    # Calculate goal difference and sort teams by standings criteria
+    teams_with_stats = []
+    for team_id, stats in team_stats.items():
+        goal_diff = stats["goals_for"] - stats["goals_against"]
+        teams_with_stats.append((
+            team_id,
+            stats["points"],
+            goal_diff,
+            stats["goals_for"],
+            stats["matches"]
+        ))
+    
+    # Sort by: 1) Points (desc), 2) Goal difference (desc), 3) Goals scored (desc)
+    teams_with_stats.sort(key=lambda x: (x[1], x[2], x[3]), reverse=True)
+    
+    # Create position mapping
+    position_dict = {}
+    for position, (team_id, _, _, _, _) in enumerate(teams_with_stats, 1):
+        position_dict[team_id] = position
+    
+    return position_dict
+
+
+def get_team_rank(team_id, current_date, season, league, match_df):
+    """
+    Get the table position of a team at a specific point in time.
+    
+    Args:
+        team_id (int): Team ID
+        current_date (datetime): Date to calculate rank for
+        season (int): Season
+        league (str): League identifier
+        match_df (pd.DataFrame): Complete match DataFrame
+        
+    Returns:
+        int: Table position (1-18 for Bundesliga, 1-18 for 2. Bundesliga), 0 if no matches played
+    """
+    standings = calculate_team_standings(match_df, current_date, season, league)
+    return standings.get(team_id, 0)  # Return 0 if team not found (no matches played)
+
+
 def add_features_to_match_df(match_df, team_match_df_dict, market_value_dict, lookback_periods=None):
     """
     Add all features to the match DataFrame.
+    
+    Features added:
+    - teamHomeValue, teamAwayValue: Market values
+    - teamHomeRank, teamAwayRank: Table positions at match time
+    - teamHomeAvgScoredGoals{N}, teamAwayAvgScoredGoals{N}: Rolling average goals scored
+    - teamHomeAvgGottenGoals{N}, teamAwayAvgGottenGoals{N}: Rolling average goals conceded
+    - teamHomeAvgTeamPoints{N}, teamAwayAvgTeamPoints{N}: Rolling average points per match
     
     Args:
         match_df (pd.DataFrame): Match DataFrame
@@ -655,6 +767,8 @@ def add_features_to_match_df(match_df, team_match_df_dict, market_value_dict, lo
     # Initialize feature dictionaries
     team_home_value = []
     team_away_value = []
+    team_home_rank = []
+    team_away_rank = []
     result_class = []
     
     # Dynamic feature lists for each lookback period
@@ -674,6 +788,12 @@ def add_features_to_match_df(match_df, team_match_df_dict, market_value_dict, lo
         # Market values
         team_home_value.append(get_market_value(row["teamHomeName"], row["season"], market_value_dict))
         team_away_value.append(get_market_value(row["teamAwayName"], row["season"], market_value_dict))
+        
+        # Table positions (ranks) - calculated up to the match date
+        home_rank = get_team_rank(row["teamHomeId"], row["date"], row["season"], row["league"], match_df)
+        away_rank = get_team_rank(row["teamAwayId"], row["date"], row["season"], row["league"], match_df)
+        team_home_rank.append(home_rank)
+        team_away_rank.append(away_rank)
         
         # Dynamic features for each lookback period
         for period in lookback_periods:
@@ -705,6 +825,8 @@ def add_features_to_match_df(match_df, team_match_df_dict, market_value_dict, lo
     # Add all features to DataFrame and ensure they are numeric
     match_df["teamHomeValue"] = pd.to_numeric(team_home_value, errors='coerce')
     match_df["teamAwayValue"] = pd.to_numeric(team_away_value, errors='coerce')
+    match_df["teamHomeRank"] = pd.to_numeric(team_home_rank, errors='coerce')
+    match_df["teamAwayRank"] = pd.to_numeric(team_away_rank, errors='coerce')
     
     # Add dynamic features and ensure they are numeric
     for feature_name, feature_values in home_features.items():
