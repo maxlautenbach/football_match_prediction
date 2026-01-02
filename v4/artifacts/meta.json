@@ -1,0 +1,40 @@
+{
+  "feature_columns": [
+    "team_home",
+    "team_away",
+    "saison",
+    "spieltag",
+    "wochentag",
+    "home_market_value",
+    "away_market_value",
+    "mv_diff",
+    "mv_ratio_log",
+    "home_home_gf_mean",
+    "home_home_ga_mean",
+    "away_away_gf_mean",
+    "away_away_ga_mean",
+    "home_season_points_per_game",
+    "home_season_gf_per_game",
+    "home_season_ga_per_game",
+    "home_recent_points_per_game",
+    "home_recent_gf_per_game",
+    "home_recent_ga_per_game",
+    "away_season_points_per_game",
+    "away_season_gf_per_game",
+    "away_season_ga_per_game",
+    "away_recent_points_per_game",
+    "away_recent_gf_per_game",
+    "away_recent_ga_per_game",
+    "home_elo",
+    "away_elo",
+    "elo_diff"
+  ],
+  "cat_feature_names": [
+    "team_home",
+    "team_away",
+    "wochentag"
+  ],
+  "goal_cap": 7,
+  "home_lambda_scale": 1.0535498644168184,
+  "away_lambda_scale": 0.9789157935395868
+}

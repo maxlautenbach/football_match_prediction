@@ -1,0 +1,51 @@
+# Use Selenium Standalone Chrome as base - already includes Chrome, ChromeDriver and all dependencies
+FROM selenium/standalone-chrome:latest
+
+# Install Python 3.11 and pip
+USER root
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    python3.11 \
+    python3.11-dev \
+    python3.11-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create symlinks for python (python3 may already exist, so use -f to force)
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
+    ln -sf /usr/bin/python3.11 /usr/bin/python3
+
+# Install pip using ensurepip
+RUN python3.11 -m ensurepip --upgrade
+
+# Install UV
+RUN python3.11 -m pip install --no-cache-dir uv
+
+# Set working directory
+WORKDIR /app
+
+# Copy project files (build context should be parent directory)
+COPY v4/pyproject.toml v4/uv.lock* ./
+COPY v4/scripts/ ./scripts/
+COPY v4/model.py ./
+COPY v4/evaluation.py ./
+COPY v4/run_scheduler.py ./
+COPY v4/artifacts/ ./artifacts/
+COPY v4/data/ ./data/
+# Copy api folder (needed by data_loader)
+COPY api/ ./api/
+
+# Install dependencies with UV
+RUN uv sync
+
+# Create directories for persistent data
+RUN mkdir -p /app/data /app/artifacts
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Expose volumes for persistent data
+VOLUME ["/app/data", "/app/artifacts"]
+
+# Entry point
+ENTRYPOINT ["python", "run_scheduler.py"]
+

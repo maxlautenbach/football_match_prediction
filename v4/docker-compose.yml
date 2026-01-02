@@ -1,0 +1,19 @@
+services:
+  football-prediction:
+    build:
+      context: ..
+      dockerfile: v4/Dockerfile
+    platform: linux/amd64
+    container_name: football-prediction-scheduler
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+    shm_size: '2gb'  # Increase shared memory for Chrome
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Keep container running
+    stdin_open: true
+    tty: true
