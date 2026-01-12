@@ -39,6 +39,11 @@ def extract_match_data(json_data: dict, league: Optional[str] = None) -> dict:
     """
     Extract relevant match data from OpenLigaDB JSON response.
     
+    Handles match status including cancelled/postponed matches:
+    - "finished": Match has an Endergebnis
+    - "future": Match is scheduled and not yet played
+    - "cancelled": Match is in the past but has no result (likely cancelled/postponed)
+    
     Args:
         json_data (dict): JSON response from OpenLigaDB API
         league (str, optional): League identifier (bl1, bl2)
@@ -60,12 +65,26 @@ def extract_match_data(json_data: dict, league: Optional[str] = None) -> dict:
     status = "future"
     goals_home = None
     goals_away = None
+    
+    # Check if match has finished
+    has_result = False
     for match_result in json_data["matchResults"]:
         if match_result["resultName"] == "Endergebnis":
             status = "finished"
             goals_home = match_result["pointsTeam1"]
             goals_away = match_result["pointsTeam2"]
+            has_result = True
             break
+    
+    # Handle edge case: Match is in the past but has no result (cancelled/postponed)
+    if not has_result:
+        match_date = match_data["date"]
+        current_time = datetime.datetime.now()
+        
+        # If match date is more than 24 hours in the past and still no result, 
+        # it's likely cancelled or postponed
+        if match_date < (current_time - datetime.timedelta(hours=24)):
+            status = "cancelled"
     
     match_data["status"] = status
     match_data["goalsHome"] = goals_home
@@ -255,7 +274,11 @@ def update_match_data_delta(
 
 def find_next_match_day(match_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Find the next complete match day.
+    Find the next complete match day with all matches still in the future.
+    
+    Handles edge case where matches are cancelled/postponed:
+    - Only returns matchdays where at least 9 matches have status "future"
+    - Ignores matchdays with cancelled or already played matches
     
     Args:
         match_df (pd.DataFrame): Match DataFrame
@@ -271,19 +294,29 @@ def find_next_match_day(match_df: pd.DataFrame) -> pd.DataFrame:
     next_match_day = 1
     season = None
     
+    # Find the first matchday that has at least 9 future matches
     for _, row in future_matches.iterrows():
         next_match_day = row["matchDay"]
         season = row["season"]
-        if len(
+        
+        # Count how many matches in this matchday are "future"
+        future_in_matchday = len(
             match_df[
                 (match_df["matchDay"] == next_match_day)
                 & (match_df["season"] == season)
+                & (match_df["status"] == "future")
             ]
-        ) == 9:
+        )
+        
+        # A complete matchday should have 9 future matches
+        if future_in_matchday >= 9:
             break
     
+    # Return all future matches from this matchday
     next_match_day_df = match_df[
-        (match_df["matchDay"] == next_match_day) & (match_df["season"] == season)
+        (match_df["matchDay"] == next_match_day) 
+        & (match_df["season"] == season)
+        & (match_df["status"] == "future")
     ]
     return next_match_day_df
 

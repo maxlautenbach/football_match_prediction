@@ -121,6 +121,9 @@ def detect_matchday_end(match_df: pd.DataFrame) -> Optional[datetime.datetime]:
     """
     Detect the end date of the last completed matchday.
     
+    A matchday is considered completed if all matches are either finished or cancelled.
+    This handles the edge case where matches are postponed/cancelled.
+    
     Args:
         match_df: DataFrame with match data
         
@@ -136,10 +139,11 @@ def detect_matchday_end(match_df: pd.DataFrame) -> Optional[datetime.datetime]:
     completed_matchdays = []
     
     for (matchday, season), group in matchday_groups:
-        # Check if all matches in this matchday are finished
-        all_finished = (group["status"] == "finished").all()
+        # Check if all matches in this matchday are finished or cancelled
+        # (not future anymore)
+        all_completed = ~(group["status"] == "future").any()
         
-        if all_finished:
+        if all_completed:
             # Get the latest match date in this matchday
             latest_date = group["date"].max()
             completed_matchdays.append({

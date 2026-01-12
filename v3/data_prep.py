@@ -134,6 +134,9 @@ def extract_result(match_results):
     """
     Extract match result from match results data.
     
+    Returns status as "finished" if match has Endergebnis, otherwise "future".
+    Note: Status "cancelled" is assigned later in extract_match_data based on date.
+    
     Args:
         match_results (list): List of match result dictionaries
         
@@ -171,6 +174,11 @@ def extract_match_data(json, league=None):
     """
     Extract relevant match data from OpenLigaDB JSON response.
     
+    Handles match status including cancelled/postponed matches:
+    - "finished": Match has an Endergebnis
+    - "future": Match is scheduled and not yet played
+    - "cancelled": Match is in the past but has no result (likely cancelled/postponed)
+    
     Args:
         json (dict): JSON response from OpenLigaDB API
         league (str, optional): League identifier (bl1, bl2)
@@ -186,6 +194,15 @@ def extract_match_data(json, league=None):
     match_data["teamAwayId"] = json["team2"]["teamId"]
     match_data["teamAwayName"] = json["team2"]["teamName"]
     match_data["status"], match_data["goalsHome"], match_data["goalsAway"] = extract_result(json["matchResults"])
+    
+    # Handle edge case: Match is in the past but has no result (cancelled/postponed)
+    if match_data["status"] == "future":
+        current_time = datetime.datetime.now()
+        # If match date is more than 24 hours in the past and still no result,
+        # it's likely cancelled or postponed
+        if match_data["date"] < (current_time - datetime.timedelta(hours=24)):
+            match_data["status"] = "cancelled"
+    
     match_data["winnerTeamId"] = extract_winner(match_data)
     match_data["matchDay"] = json["group"]["groupOrderID"]
     match_data["season"] = json["leagueSeason"]
@@ -376,7 +393,11 @@ def update_future_matches(match_df):
 
 def find_next_match_day(match_df):
     """
-    Find the next complete match day.
+    Find the next complete match day with all matches still in the future.
+    
+    Handles edge case where matches are cancelled/postponed:
+    - Only returns matchdays where at least 9 matches have status "future"
+    - Ignores matchdays with cancelled or already played matches
     
     Args:
         match_df (pd.DataFrame): Match DataFrame
@@ -393,13 +414,30 @@ def find_next_match_day(match_df):
     next_match_day = 1
     season = None
     
+    # Find the first matchday that has at least 9 future matches
     for _, row in future_matches.iterrows():
         next_match_day = row["matchDay"]
         season = row["season"]
-        if len(match_df[(match_df["matchDay"] == next_match_day) & (match_df["season"] == season)]) == 9:
+        
+        # Count how many matches in this matchday are "future"
+        future_in_matchday = len(
+            match_df[
+                (match_df["matchDay"] == next_match_day) 
+                & (match_df["season"] == season)
+                & (match_df["status"] == "future")
+            ]
+        )
+        
+        # A complete matchday should have 9 future matches
+        if future_in_matchday >= 9:
             break
     
-    next_match_day_df = match_df[(match_df["matchDay"] == next_match_day) & (match_df["season"] == season)]
+    # Return all future matches from this matchday
+    next_match_day_df = match_df[
+        (match_df["matchDay"] == next_match_day) 
+        & (match_df["season"] == season)
+        & (match_df["status"] == "future")
+    ]
     return next_match_day_df
 
 
