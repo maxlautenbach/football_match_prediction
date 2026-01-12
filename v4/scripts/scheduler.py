@@ -119,7 +119,7 @@ def send_email(
 
 def detect_matchday_end(match_df: pd.DataFrame) -> Optional[datetime.datetime]:
     """
-    Detect the end date of the last completed matchday.
+    Detect the start time of the last match in the last completed matchday.
     
     A matchday is considered completed if all matches are either finished or cancelled.
     This handles the edge case where matches are postponed/cancelled.
@@ -128,7 +128,7 @@ def detect_matchday_end(match_df: pd.DataFrame) -> Optional[datetime.datetime]:
         match_df: DataFrame with match data
         
     Returns:
-        datetime of the latest match date of the last completed matchday, or None
+        datetime of the latest match start time of the last completed matchday, or None
     """
     if len(match_df) == 0:
         return None
@@ -144,12 +144,23 @@ def detect_matchday_end(match_df: pd.DataFrame) -> Optional[datetime.datetime]:
         all_completed = ~(group["status"] == "future").any()
         
         if all_completed:
-            # Get the latest match date in this matchday
-            latest_date = group["date"].max()
+            # Get the latest match start time in this matchday
+            latest_match_start = group["date"].max()
+            
+            # Convert to datetime if needed
+            if isinstance(latest_match_start, pd.Timestamp):
+                latest_match_start = latest_match_start.to_pydatetime()
+            elif not isinstance(latest_match_start, datetime.datetime):
+                # If it's a date object, assume evening match at 20:30
+                latest_match_start = datetime.datetime.combine(
+                    latest_match_start, 
+                    datetime.time(20, 30)
+                )
+            
             completed_matchdays.append({
                 "matchday": matchday,
                 "season": season,
-                "end_date": latest_date,
+                "end_date": latest_match_start,
             })
     
     if not completed_matchdays:
@@ -261,8 +272,8 @@ def schedule_next_prediction() -> Optional[datetime.datetime]:
     """
     Schedule the next prediction job based on the matchday we just predicted for.
     
-    Uses next_matchday_df to find the date of the matchday we predicted for,
-    then schedules the next job for that date + 1 day at 17:00.
+    Uses next_matchday_df to find the latest match start time of the matchday,
+    then schedules the next job for 3 hours after that match begins.
     
     Returns:
         datetime of next scheduled job, or None if not scheduled
@@ -290,9 +301,15 @@ def schedule_next_prediction() -> Optional[datetime.datetime]:
                 print("No completed matchday found")
                 return None
             
-            # Schedule for matchday_end + 1 day at 17:00
-            next_job_date = matchday_end_date.date() + datetime.timedelta(days=1)
-            next_job_datetime = datetime.datetime.combine(next_job_date, datetime.time(17, 0))
+            # Schedule for matchday_end + 3 hours
+            if isinstance(matchday_end_date, datetime.datetime):
+                next_job_datetime = matchday_end_date + datetime.timedelta(hours=3)
+            else:
+                # If it's just a date, assume evening match (20:30) + 3 hours
+                next_job_datetime = datetime.datetime.combine(
+                    matchday_end_date, 
+                    datetime.time(23, 30)
+                )
         else:
             next_matchday_df = pd.DataFrame(pickle.load(open(next_matchday_path, "rb")))
             
@@ -300,18 +317,22 @@ def schedule_next_prediction() -> Optional[datetime.datetime]:
                 print("next_matchday_df is empty")
                 return None
             
-            # Get the latest (spätestes) match date of the matchday we predicted for
-            matchday_date = next_matchday_df["date"].max()
+            # Get the latest match start time (including time, not just date)
+            latest_match_start = next_matchday_df["date"].max()
             
             # Get current matchday number and season
             current_matchday = next_matchday_df["matchDay"].iloc[0]
             current_season = next_matchday_df["season"].iloc[0]
             
-            # If it's a datetime, convert to date; if it's already a date, use it
-            if isinstance(matchday_date, datetime.datetime):
-                matchday_date = matchday_date.date()
-            elif isinstance(matchday_date, pd.Timestamp):
-                matchday_date = matchday_date.date()
+            # Convert to datetime if needed
+            if isinstance(latest_match_start, pd.Timestamp):
+                latest_match_start = latest_match_start.to_pydatetime()
+            elif not isinstance(latest_match_start, datetime.datetime):
+                # If it's a date object, assume evening match at 20:30
+                latest_match_start = datetime.datetime.combine(
+                    latest_match_start, 
+                    datetime.time(20, 30)
+                )
             
             # Check if there is a next matchday (Edge Case: Spieltag 34 is the last)
             current_season_data = get_current_season(current_date)
@@ -333,19 +354,15 @@ def schedule_next_prediction() -> Optional[datetime.datetime]:
                 print(f"Spieltag {current_matchday} is the last matchday of the season. No further job will be scheduled.")
                 return None
             
-            # Schedule for matchday_date + 1 day at 17:00
-            next_job_date = matchday_date + datetime.timedelta(days=1)
-            next_job_datetime = datetime.datetime.combine(next_job_date, datetime.time(17, 0))
+            # Schedule for latest match start + 3 hours
+            next_job_datetime = latest_match_start + datetime.timedelta(hours=3)
             
-            print(f"Current matchday: {current_matchday}, latest match date: {matchday_date}, scheduling job for: {next_job_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"Current matchday: {current_matchday}, latest match starts: {latest_match_start.strftime('%Y-%m-%d %H:%M')}, scheduling job for: {next_job_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
         
-        # If the calculated time is in the past, schedule for tomorrow at 17:00
+        # If the calculated time is in the past, schedule for 1 hour from now
         if next_job_datetime < current_date:
-            next_job_datetime = datetime.datetime.combine(
-                current_date.date() + datetime.timedelta(days=1),
-                datetime.time(17, 0)
-            )
-            print(f"Calculated time was in the past, scheduling for tomorrow: {next_job_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+            next_job_datetime = current_date + datetime.timedelta(hours=1)
+            print(f"Calculated time was in the past, scheduling for 1 hour from now: {next_job_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
         
         return next_job_datetime
     except Exception as e:
