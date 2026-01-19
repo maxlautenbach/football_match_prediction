@@ -393,52 +393,64 @@ def update_future_matches(match_df):
 
 def find_next_match_day(match_df):
     """
-    Find the next complete match day with all matches still in the future.
+    Find the next match day to predict.
     
-    Handles edge case where matches are cancelled/postponed:
-    - Only returns matchdays where at least 9 matches have status "future"
-    - Ignores matchdays with cancelled or already played matches
+    Logic:
+    1. Check if there's a matchday with some matches already played but still has future matches
+       → Return only the future matches from that matchday (partial matchday)
+    2. Otherwise, find the first matchday with all 9 matches still future
+       → Return that complete matchday
+    
+    This handles the edge case when the server restarts during a matchday:
+    - Only the remaining (future) matches of the current matchday are predicted
+    - We don't skip to the next matchday until the current one is complete
     
     Args:
         match_df (pd.DataFrame): Match DataFrame
         
     Returns:
-        pd.DataFrame: DataFrame containing next match day matches
+        pd.DataFrame: DataFrame containing matches to predict
     """
-    future_matches = match_df[match_df["status"] == "future"]
-    
-    if len(future_matches) == 0:
-        # No future matches, return empty DataFrame
+    if len(match_df) == 0:
         return match_df.iloc[0:0].copy()
     
-    next_match_day = 1
-    season = None
+    current_season = match_df["season"].max()
     
-    # Find the first matchday that has at least 9 future matches
-    for _, row in future_matches.iterrows():
-        next_match_day = row["matchDay"]
-        season = row["season"]
-        
-        # Count how many matches in this matchday are "future"
-        future_in_matchday = len(
-            match_df[
-                (match_df["matchDay"] == next_match_day) 
-                & (match_df["season"] == season)
-                & (match_df["status"] == "future")
-            ]
-        )
-        
-        # A complete matchday should have 9 future matches
-        if future_in_matchday >= 9:
-            break
+    # Group by matchday to analyze each one
+    matchday_groups = match_df[match_df["season"] == current_season].groupby("matchDay")
     
-    # Return all future matches from this matchday
-    next_match_day_df = match_df[
-        (match_df["matchDay"] == next_match_day) 
-        & (match_df["season"] == season)
-        & (match_df["status"] == "future")
-    ]
-    return next_match_day_df
+    # First pass: Look for a partial matchday (some finished/cancelled, some future)
+    for matchday in sorted(matchday_groups.groups.keys()):
+        group = matchday_groups.get_group(matchday)
+        
+        future_count = (group["status"] == "future").sum()
+        finished_count = (group["status"] == "finished").sum()
+        cancelled_count = (group["status"] == "cancelled").sum()
+        
+        # If this matchday has both completed and future matches, it's in progress
+        if future_count > 0 and (finished_count > 0 or cancelled_count > 0):
+            # Return only the future matches from this partial matchday
+            return group[group["status"] == "future"].copy()
+    
+    # Second pass: Look for the first complete matchday with all matches future
+    for matchday in sorted(matchday_groups.groups.keys()):
+        group = matchday_groups.get_group(matchday)
+        
+        future_count = (group["status"] == "future").sum()
+        
+        # A complete future matchday should have at least 9 matches
+        if future_count >= 9:
+            return group[group["status"] == "future"].copy()
+    
+    # Fallback: Return any future matches we can find
+    future_matches = match_df[match_df["status"] == "future"]
+    if len(future_matches) > 0:
+        # Get the lowest matchday number with future matches
+        min_matchday = future_matches["matchDay"].min()
+        return future_matches[future_matches["matchDay"] == min_matchday].copy()
+    
+    # No future matches at all
+    return match_df.iloc[0:0].copy()
 
 
 def prepare_match_dataframe(match_df):
