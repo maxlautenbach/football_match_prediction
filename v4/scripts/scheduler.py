@@ -171,6 +171,85 @@ def detect_matchday_end(match_df: pd.DataFrame) -> Optional[datetime.datetime]:
     return latest_matchday["end_date"]
 
 
+def get_latest_match_start_for_matchday(
+    match_df: pd.DataFrame, matchday: int, season: int
+) -> Optional[datetime.datetime]:
+    """
+    Get the latest match start time for a given matchday from the full match dataframe.
+
+    Uses the complete season data so the next run is scheduled after the real matchday end
+    (e.g. Sunday evening), even when next_matchday_df only contains a subset of matches.
+
+    Args:
+        match_df: Full match DataFrame for the season
+        matchday: Matchday number
+        season: Season year (start year)
+
+    Returns:
+        datetime of the latest match start in that matchday, or None if no matches found
+    """
+    subset = match_df[
+        (match_df["matchDay"] == matchday) & (match_df["season"] == season)
+    ]
+    if len(subset) == 0:
+        return None
+    latest = subset["date"].max()
+    if isinstance(latest, pd.Timestamp):
+        return latest.to_pydatetime()
+    if isinstance(latest, datetime.datetime):
+        return latest
+    # date-only fallback
+    return datetime.datetime.combine(latest, datetime.time(20, 30))
+
+
+def get_next_run_time(
+    match_df: pd.DataFrame,
+    next_matchday_df: pd.DataFrame,
+    current_date: Optional[datetime.datetime] = None,
+) -> Optional[datetime.datetime]:
+    """
+    Compute the next job run time from match data only (no file I/O).
+    Used for unit tests and mirrors the logic in schedule_next_prediction().
+
+    Args:
+        match_df: Full season match DataFrame
+        next_matchday_df: DataFrame of the next matchday to predict (from find_next_match_day)
+        current_date: Optional reference time; defaults to now
+
+    Returns:
+        When the next prediction job should run, or None if no next matchday
+    """
+    if current_date is None:
+        current_date = datetime.datetime.now()
+    if len(next_matchday_df) == 0:
+        return None
+    current_matchday = next_matchday_df["matchDay"].iloc[0]
+    current_season = next_matchday_df["season"].iloc[0]
+    latest_match_start = get_latest_match_start_for_matchday(
+        match_df, current_matchday, current_season
+    )
+    if latest_match_start is None:
+        latest_match_start = next_matchday_df["date"].max()
+    if isinstance(latest_match_start, pd.Timestamp):
+        latest_match_start = latest_match_start.to_pydatetime()
+    elif not isinstance(latest_match_start, datetime.datetime):
+        latest_match_start = datetime.datetime.combine(
+            latest_match_start, datetime.time(20, 30)
+        )
+    future_matches = match_df[
+        (match_df["matchDay"] > current_matchday)
+        & (match_df["season"] == current_season)
+        & (match_df["status"] == "future")
+    ]
+    has_next_matchday = len(future_matches) > 0
+    if not has_next_matchday or current_matchday >= 34:
+        return None
+    next_job = latest_match_start + datetime.timedelta(hours=3)
+    if next_job < current_date:
+        next_job = current_date + datetime.timedelta(hours=1)
+    return next_job
+
+
 def run_prediction_job() -> tuple[str, Optional[datetime.datetime]]:
     """
     Run prediction and upload job.
@@ -272,13 +351,24 @@ def schedule_next_prediction() -> Optional[datetime.datetime]:
     """
     Schedule the next prediction job based on the matchday we just predicted for.
     
-    Uses next_matchday_df to find the latest match start time of the matchday,
+    Uses the full season match_df to get the latest match start time of the next matchday,
+    so the job is scheduled for after the real matchday end (e.g. Sunday evening + 3h),
     then schedules the next job for 3 hours after that match begins.
     
     Returns:
         datetime of next scheduled job, or None if not scheduled
     """
-    current_date = datetime.datetime.now()
+    # Optional override for testing: SCHEDULER_TEST_NOW=2025-03-09T22:00:00
+    test_now = os.getenv("SCHEDULER_TEST_NOW")
+    if test_now:
+        try:
+            current_date = datetime.datetime.strptime(
+                test_now, "%Y-%m-%dT%H:%M:%S"
+            )
+        except ValueError:
+            current_date = datetime.datetime.now()
+    else:
+        current_date = datetime.datetime.now()
     
     try:
         # Load next_matchday_df to get the matchday we just predicted for
@@ -317,35 +407,40 @@ def schedule_next_prediction() -> Optional[datetime.datetime]:
                 print("next_matchday_df is empty")
                 return None
             
-            # Get the latest match start time (including time, not just date)
-            latest_match_start = next_matchday_df["date"].max()
-            
-            # Get current matchday number and season
             current_matchday = next_matchday_df["matchDay"].iloc[0]
             current_season = next_matchday_df["season"].iloc[0]
+            
+            # Use full season match_df for latest match start so we schedule after
+            # the real matchday end (e.g. Sunday), not just what's in next_matchday_df
+            pickle_file = DATA_DIR / f"match_df_{current_season}.pck"
+            match_df = None
+            if pickle_file.exists():
+                match_df = pd.DataFrame(pickle.load(open(pickle_file, "rb")))
+            
+            latest_match_start = None
+            if match_df is not None:
+                latest_match_start = get_latest_match_start_for_matchday(
+                    match_df, current_matchday, current_season
+                )
+            if latest_match_start is None:
+                latest_match_start = next_matchday_df["date"].max()
             
             # Convert to datetime if needed
             if isinstance(latest_match_start, pd.Timestamp):
                 latest_match_start = latest_match_start.to_pydatetime()
             elif not isinstance(latest_match_start, datetime.datetime):
-                # If it's a date object, assume evening match at 20:30
                 latest_match_start = datetime.datetime.combine(
-                    latest_match_start, 
-                    datetime.time(20, 30)
+                    latest_match_start,
+                    datetime.time(20, 30),
                 )
             
             # Check if there is a next matchday (Edge Case: Spieltag 34 is the last)
-            current_season_data = get_current_season(current_date)
-            pickle_file = DATA_DIR / f"match_df_{current_season_data}.pck"
-            
             has_next_matchday = False
-            if pickle_file.exists():
-                match_df = pd.DataFrame(pickle.load(open(pickle_file, "rb")))
-                # Check if there are future matches after the current matchday
+            if match_df is not None:
                 future_matches = match_df[
-                    (match_df["matchDay"] > current_matchday) & 
-                    (match_df["season"] == current_season) &
-                    (match_df["status"] == "future")
+                    (match_df["matchDay"] > current_matchday)
+                    & (match_df["season"] == current_season)
+                    & (match_df["status"] == "future")
                 ]
                 has_next_matchday = len(future_matches) > 0
             
