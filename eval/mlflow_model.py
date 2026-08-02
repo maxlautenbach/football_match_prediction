@@ -110,3 +110,72 @@ def log_kicktipp_pyfunc(
             "bundle_files": sorted(p.name for p in artifacts_dir.iterdir() if p.is_file())
         },
     )
+
+
+class SaisonAusblickPyFuncModel(PythonModel):
+    """Loads saison_ausblick bundle; predict returns JSON tip strings per season."""
+
+    def load_context(self, context: PythonModelContext) -> None:
+        from models.saison_ausblick.model import SaisonAusblickModel
+
+        bundle = Path(context.artifacts["bundle"])
+        self.model = SaisonAusblickModel(bundle)
+
+    def predict(
+        self,
+        context: PythonModelContext,
+        model_input: pd.DataFrame,
+        params: dict | None = None,
+    ) -> pd.Series:
+        if not isinstance(model_input, pd.DataFrame):
+            model_input = pd.DataFrame(model_input)
+        preds = self.model.predict(model_input)
+        return pd.Series(preds, name="saison_tip", index=model_input.index)
+
+
+def log_saison_pyfunc(
+    artifacts_dir: Path,
+    *,
+    input_example: pd.DataFrame,
+    registered_model_name: str | None = None,
+    artifact_path: str = "model",
+    code_dir: Path | None = None,
+) -> Any:
+    """Log saison_ausblick bundle as MLflow pyfunc and optionally register it."""
+    from eval.mlflow_utils import SAISON_REGISTERED_MODEL_NAME
+    from models.saison_ausblick.model import SaisonAusblickModel
+
+    if registered_model_name is None:
+        registered_model_name = SAISON_REGISTERED_MODEL_NAME
+
+    example = input_example.copy()
+    if "Saison" not in example.columns:
+        raise ValueError("input_example must include column 'Saison'")
+    example = example[["Saison"]].copy()
+
+    live = SaisonAusblickModel(artifacts_dir)
+    example_preds = pd.Series(
+        live.predict(example.head(min(3, len(example)))), name="saison_tip"
+    )
+    signature = infer_signature(example.head(min(3, len(example))), example_preds)
+
+    code_paths = _code_paths(code_dir) if code_dir is not None else None
+    pip_requirements = [
+        "pandas>=2.2",
+        "numpy>=1.26",
+    ]
+
+    return mlflow.pyfunc.log_model(
+        name=artifact_path,
+        python_model=SaisonAusblickPyFuncModel(),
+        artifacts={"bundle": str(artifacts_dir)},
+        registered_model_name=registered_model_name,
+        signature=signature,
+        input_example=example.head(min(3, len(example))),
+        code_paths=code_paths,
+        pip_requirements=pip_requirements,
+        metadata={
+            "bundle_files": sorted(p.name for p in artifacts_dir.iterdir() if p.is_file()),
+            "experiment": "kicktipp-saison",
+        },
+    )

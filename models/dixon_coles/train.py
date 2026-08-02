@@ -82,9 +82,16 @@ def train(
     checkpoint_seasons_back = int(params.get("checkpoint_seasons_back", 2))
     newcomer_quantile = float(params.get("newcomer_quantile", 0.2))
     min_team_evidence = float(params.get("min_team_evidence", 10.0))
+    home_lambda_scale = float(params.get("home_lambda_scale", 1.0))
+    away_lambda_scale = float(params.get("away_lambda_scale", 1.0))
+    probability_temperature = float(params.get("probability_temperature", 1.0))
 
     if half_life_seasons <= 0:
         raise ValueError(f"half_life_seasons must be > 0, got {half_life_seasons}")
+    if home_lambda_scale <= 0 or away_lambda_scale <= 0:
+        raise ValueError("home_lambda_scale and away_lambda_scale must be > 0")
+    if probability_temperature <= 0:
+        raise ValueError("probability_temperature must be > 0")
 
     history = _prepare_history(train_df_all, holdout_df)
 
@@ -216,6 +223,9 @@ def train(
         "liga": liga,
         "newcomer_quantile": newcomer_quantile,
         "min_team_evidence": min_team_evidence,
+        "home_lambda_scale": home_lambda_scale,
+        "away_lambda_scale": away_lambda_scale,
+        "probability_temperature": probability_temperature,
         "checkpoint_seasons": checkpoint_seasons,
         "holdout_season": holdout_season,
         "train_seasons": train_seasons,
@@ -246,6 +256,9 @@ def train(
         "final_home_advantage": float(last["home_advantage"]),
         "final_rho": float(last["rho"]),
         "final_intercept": float(last["intercept"]),
+        "home_lambda_scale": home_lambda_scale,
+        "away_lambda_scale": away_lambda_scale,
+        "probability_temperature": probability_temperature,
         "train_seasons": train_seasons,
         "liga": liga,
     }

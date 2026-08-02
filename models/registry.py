@@ -20,6 +20,12 @@ def _register() -> dict[str, dict[str, Any]]:
     from models.dixon_coles import train as dc_train
     from models.majority_baseline import model as maj_model
     from models.majority_baseline import train as maj_train
+    from models.market_dixon_coles import model as market_dc_model
+    from models.market_dixon_coles import train as market_dc_train
+    from models.poisson_blend import model as blend_model
+    from models.poisson_blend import train as blend_train
+    from models.saison_ausblick import model as saison_model
+    from models.saison_ausblick import train as saison_train
 
     return {
         "catboost_poisson": {
@@ -36,6 +42,21 @@ def _register() -> dict[str, dict[str, Any]]:
             "train": maj_train.train,
             "load": maj_model.load,
             "default_registered_name_attr": "BASELINE_REGISTERED_MODEL_NAME",
+        },
+        "market_dixon_coles": {
+            "train": market_dc_train.train,
+            "load": market_dc_model.load,
+            "default_registered_name_attr": "MARKET_DIXON_COLES_REGISTERED_MODEL_NAME",
+        },
+        "poisson_blend": {
+            "train": blend_train.train,
+            "load": blend_model.load,
+            "default_registered_name_attr": "POISSON_BLEND_REGISTERED_MODEL_NAME",
+        },
+        "saison_ausblick": {
+            "train": saison_train.train,
+            "load": saison_model.load,
+            "default_registered_name_attr": "SAISON_REGISTERED_MODEL_NAME",
         },
     }
 

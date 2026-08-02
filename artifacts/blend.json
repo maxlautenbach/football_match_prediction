@@ -1,0 +1,28 @@
+{
+  "blend_weight": 0.6,
+  "goal_cap": 7,
+  "liga": "bl1",
+  "holdout_season": 2025,
+  "train_seasons": "2009-2024",
+  "calibration_seasons": [
+    2023,
+    2024
+  ],
+  "calibration_curve": {
+    "0.00": 690,
+    "0.10": 682,
+    "0.20": 695,
+    "0.30": 685,
+    "0.40": 689,
+    "0.50": 686,
+    "0.60": 697,
+    "0.70": 668,
+    "0.80": 650,
+    "0.90": 660,
+    "1.00": 663
+  },
+  "calib_kt_raw_catboost": 690,
+  "calib_kt_raw_dixon_coles": 663,
+  "calib_kt_raw_best": 697,
+  "n_calibration_matches": 612
+}

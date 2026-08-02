@@ -26,7 +26,12 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from data_loader import update_match_data_delta, update_next_matchday_df
 from dataset_utils import DEFAULT_HOLDOUT_SEASON, generate_datasets_from_pickle
-from eval.metrics import evaluate_predictions, print_metrics
+from eval.metrics import (
+    evaluate_predictions,
+    holdout_kicktipp_z_score,
+    kicktipp_scores_by_season,
+    print_metrics,
+)
 from eval.mlflow_model import log_kicktipp_pyfunc
 from eval.mlflow_utils import (
     ALIAS_BASELINE,
@@ -164,12 +169,35 @@ def main(argv: list[str] | None = None) -> None:
             recipe_name=recipe_name,
             holdout_season=holdout_season,
         )
+        causal_backtest_scores = train_info.pop("_backtest_season_scores", None)
 
         holdout_bl1 = _filter_liga(holdout_df, liga)
+        train_bl1 = _filter_liga(train_df_all, liga)
         model = Model(artifacts_dir=bundle_dir)
         y_true = holdout_bl1["Ergebnis"]
         y_pred = pd.Series(model.predict(holdout_bl1.drop(columns=["Ergebnis"])))
         holdout_metrics = evaluate_predictions(y_true, y_pred)
+
+        # Prefer genuine rolling-origin scores supplied by a trainer. Legacy
+        # model types fall back to their historical in-sample diagnostic.
+        if causal_backtest_scores:
+            train_season_scores = {
+                int(season): float(score)
+                for season, score in causal_backtest_scores.items()
+            }
+        else:
+            train_y_true = train_bl1["Ergebnis"].reset_index(drop=True)
+            train_y_pred = pd.Series(
+                model.predict(train_bl1.drop(columns=["Ergebnis"]).reset_index(drop=True))
+            )
+            train_season_scores = kicktipp_scores_by_season(
+                train_y_true,
+                train_y_pred,
+                train_bl1["Saison"].reset_index(drop=True),
+            )
+        holdout_metrics.update(
+            holdout_kicktipp_z_score(holdout_metrics["kicktipp_score"], train_season_scores)
+        )
         print_metrics(f"Holdout season {holdout_season} ({model_type})", holdout_metrics)
 
         if args.keep_bundle_dir is not None:
@@ -182,7 +210,6 @@ def main(argv: list[str] | None = None) -> None:
         if not args.no_mlflow:
             setup_mlflow()
             run_name = args.run_name or f"{model_type}-{recipe_name}-holdout-{holdout_season}"
-            train_bl1 = _filter_liga(train_df_all, liga)
             train_cols = [
                 c
                 for c in ["Team Home", "Team Away", "Ergebnis", "Saison", "Spieltag", "Wochentag", "Liga"]
@@ -205,7 +232,9 @@ def main(argv: list[str] | None = None) -> None:
                         **{
                             k: v
                             for k, v in train_info.items()
-                            if k not in {"model_type", "n_train"} and k not in params
+                            if k not in {"model_type", "n_train"}
+                            and not k.startswith("_")
+                            and k not in params
                         },
                     }
                 )

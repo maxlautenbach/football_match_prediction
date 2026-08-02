@@ -9,12 +9,16 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+import shutil
 
-# Add BASE_DIR to path for imports
-BASE_DIR = Path(__file__).parent.parent
+# Add repo root + scripts/ so both `models` and `predict` resolve
+# (script execution already puts scripts/ on path; imports need both).
+SCRIPTS_DIR = Path(__file__).resolve().parent
+BASE_DIR = SCRIPTS_DIR.parent
 sys.path.insert(0, str(BASE_DIR))
+sys.path.insert(0, str(SCRIPTS_DIR))
 
-# Import prediction function (relative import since we're in scripts/)
+# Import prediction function
 from predict import generate_predictions
 
 
@@ -47,105 +51,112 @@ def upload_predictions_to_platform(results_df: pd.DataFrame, auto_submit: bool =
             print("Please create a .env file in the project root with these variables.")
             return
         
-        print("Starting browser (headless mode)...")
+        print("Starting browser...")
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.chrome.service import Service
+        import platform
         import subprocess
-        
-        # Find Chrome and ChromeDriver binaries (try common locations)
+
+        # Find Chrome binary (macOS + common Linux paths)
         chrome_binary = None
-        chromedriver_binary = None
-        
-        # Try common Chrome locations
-        for path in ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/local/bin/google-chrome", "/opt/google/chrome/chrome"]:
+        chrome_candidates = [
+            "/opt/google/chrome/google-chrome",
+            "/opt/google/chrome/chrome",
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/local/bin/google-chrome",
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+        for path in chrome_candidates:
             if os.path.exists(path) and os.access(path, os.X_OK):
                 chrome_binary = path
                 break
-        
-        # Try common ChromeDriver locations
-        for path in ["/usr/bin/chromedriver", "/usr/local/bin/chromedriver"]:
+
+        # Prefer an installed chromedriver; otherwise let Selenium Manager resolve it.
+        chromedriver_binary = None
+        for path in [
+            "/usr/bin/chromedriver",
+            "/opt/selenium/chromedriver",
+            "/opt/homebrew/bin/chromedriver",
+            "/usr/local/bin/chromedriver",
+        ]:
             if os.path.exists(path) and os.access(path, os.X_OK):
                 chromedriver_binary = path
                 break
-        
+
+        # selenium/standalone-chrome often ships chromedriver on PATH
+        if chromedriver_binary is None:
+            which = shutil.which("chromedriver")
+            if which:
+                chromedriver_binary = which
+        if chrome_binary is None:
+            which = shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser")
+            if which:
+                chrome_binary = which
+
         if not chrome_binary:
-            raise FileNotFoundError("Chrome binary not found in common locations")
-        if not chromedriver_binary:
-            raise FileNotFoundError("ChromeDriver not found in common locations")
-        
+            raise FileNotFoundError(
+                "Chrome binary not found. Install Google Chrome or set chrome_options.binary_location."
+            )
+
         # Test Chrome binary
         try:
             result = subprocess.run(
                 [chrome_binary, "--version"],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
             )
-            print(f"Chrome version: {result.stdout.strip()}")
+            print(f"Chrome version: {result.stdout.strip() or result.stderr.strip()}")
         except Exception as e:
             print(f"Warning: Could not verify Chrome version: {e}")
-        
-        # Test ChromeDriver binary
-        try:
-            result = subprocess.run(
-                [chromedriver_binary, "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            print(f"ChromeDriver version: {result.stdout.strip()}")
-        except Exception as e:
-            print(f"Warning: Could not verify ChromeDriver version: {e}")
-            print(f"This may indicate missing dependencies. Error: {e}")
-        
+
+        if chromedriver_binary:
+            try:
+                result = subprocess.run(
+                    [chromedriver_binary, "--version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                print(f"ChromeDriver version: {result.stdout.strip()}")
+            except Exception as e:
+                print(f"Warning: Could not verify ChromeDriver version: {e}")
+        else:
+            print("No local chromedriver found — Selenium Manager will fetch a matching driver")
+
         chrome_options = Options()
-        # Essential headless and container options
-        # Use old headless mode as it's more stable in containers
-        chrome_options.add_argument("--headless")  # Use old headless mode (more stable)
-        chrome_options.add_argument("--no-sandbox")  # Required for server environments
-        chrome_options.add_argument("--disable-setuid-sandbox")  # Disable setuid sandbox
-        chrome_options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems
-        chrome_options.add_argument("--disable-gpu")  # Disable GPU hardware acceleration
-        chrome_options.add_argument("--disable-extensions")  # Disable extensions
-        chrome_options.add_argument("--disable-background-timer-throttling")  # For headless
-        chrome_options.add_argument("--disable-backgrounding-occluded-windows")  # For headless
-        chrome_options.add_argument("--disable-renderer-backgrounding")  # For headless
-        chrome_options.add_argument("--disable-features=TranslateUI,VizDisplayCompositor")  # Disable translation UI and compositor
-        chrome_options.add_argument("--window-size=1920,1080")  # Set window size
-        chrome_options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        chrome_options.add_argument("--remote-debugging-port=9222")  # Use fixed port for debugging
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")  # Hide automation
-        chrome_options.add_argument("--disable-infobars")  # Disable infobars
-        chrome_options.add_argument("--disable-logging")  # Disable logging
-        chrome_options.add_argument("--log-level=3")  # Only fatal errors
-        chrome_options.add_argument("--disable-default-apps")  # Disable default apps
-        # Add experimental options for better container compatibility
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-logging", "enable-automation"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
-        
-        # Use the installed Chrome binary instead of letting Selenium download a new one
-        chrome_options.binary_location = chrome_binary
-        
-        # Use the installed ChromeDriver with additional service arguments
-        service = Service(
-            chromedriver_binary,
-            service_args=['--verbose', '--log-path=/tmp/chromedriver.log']
+        # Headless is fine for auto-submit; keep headed on macOS for manual review.
+        if auto_submit or platform.system() != "Darwin":
+            chrome_options.add_argument("--headless=new")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-setuid-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument(
+            "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
-        
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_experimental_option(
+            "excludeSwitches", ["enable-logging", "enable-automation"]
+        )
+        chrome_options.add_experimental_option("useAutomationExtension", False)
+        chrome_options.binary_location = chrome_binary
+
         print("Initializing Chrome WebDriver...")
         try:
-            driver = webdriver.Chrome(service=service, options=chrome_options)
+            if chromedriver_binary:
+                service = Service(chromedriver_binary)
+                driver = webdriver.Chrome(service=service, options=chrome_options)
+            else:
+                driver = webdriver.Chrome(options=chrome_options)
             print("Chrome WebDriver initialized successfully")
         except Exception as e:
             print(f"Failed to initialize Chrome WebDriver: {e}")
-            # Try to read ChromeDriver log if it exists
-            try:
-                if os.path.exists("/tmp/chromedriver.log"):
-                    with open("/tmp/chromedriver.log", "r") as f:
-                        log_content = f.read()
-                        print(f"ChromeDriver log:\n{log_content}")
-            except:
-                pass
             raise
         
         try:

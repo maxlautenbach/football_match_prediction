@@ -18,27 +18,28 @@ env/
 *.swo
 *~
 
-# Data (will be mounted as volume)
-# data/
-# artifacts/
-
 # Logs
 *.log
 logs/
 
-# Environment
+# Environment (CapRover injects env vars; never bake secrets)
+.env
 .env.local
 .env.*.local
 
-# Git
+# Git / local MLflow / backups
 .git/
 .gitignore
+mlruns/
+mlartifacts/
+mlflow.db
+.mlflow_promote_tmp/
+artifacts_prev/
+deploy.tar.gz
 
-# Documentation
+# Documentation / notebooks (keep README for image metadata)
 *.md
 !README.md
-
-# Jupyter
 *.ipynb
 .ipynb_checkpoints/
 
@@ -46,14 +47,16 @@ logs/
 .DS_Store
 Thumbs.db
 
-# Test files
+# Test / temp
 test_*.py
 *_test.py
 tests/
-
-# Prediction outputs (will be generated)
 prediction_*.csv
 
-# Datasets (not needed in container)
+# Not needed at runtime in the scheduler image
 datasets/
+recipes/
+docs/
+v4/
+evaluation_template/
 

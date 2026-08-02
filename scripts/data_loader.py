@@ -97,6 +97,40 @@ def extract_match_data(json_data: dict, league: Optional[str] = None) -> dict:
     return match_data
 
 
+def extract_goal_events(json_data: dict, league: Optional[str] = None) -> list[dict]:
+    """Extract goal-scorer events from an OpenLigaDB match JSON payload."""
+    team1 = json_data.get("team1") or {}
+    team2 = json_data.get("team2") or {}
+    team_by_id = {
+        team1.get("teamId"): team1.get("teamName"),
+        team2.get("teamId"): team2.get("teamName"),
+    }
+    season = json_data.get("leagueSeason")
+    match_id = json_data.get("matchID")
+    match_day = (json_data.get("group") or {}).get("groupOrderID")
+    rows: list[dict] = []
+    for goal in json_data.get("goals") or []:
+        scoring_team_id = goal.get("scoringTeamId")
+        rows.append(
+            {
+                "matchId": match_id,
+                "season": season,
+                "league": league,
+                "matchDay": match_day,
+                "goalId": goal.get("goalID"),
+                "goalGetterId": goal.get("goalGetterID"),
+                "goalGetterName": goal.get("goalGetterName"),
+                "scoringTeamId": scoring_team_id,
+                "scoringTeamName": team_by_id.get(scoring_team_id),
+                "isOwnGoal": bool(goal.get("isOwnGoal")),
+                "isPenalty": bool(goal.get("isPenalty")),
+                "isOvertime": bool(goal.get("isOvertime")),
+                "matchMinute": goal.get("matchMinute"),
+            }
+        )
+    return rows
+
+
 def get_current_season(current_date: Optional[datetime.datetime] = None) -> int:
     """
     Determine the current season start year.

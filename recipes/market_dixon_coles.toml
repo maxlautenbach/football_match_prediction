@@ -1,0 +1,25 @@
+# Recipe: Dixon-Coles ratings with a decaying, season-relative market-value prior.
+model_type = "market_dixon_coles"
+# Leave empty to use eval.mlflow_utils.MARKET_DIXON_COLES_REGISTERED_MODEL_NAME
+registered_model_name = ""
+
+[params]
+liga = "bl1"
+goal_cap = 7
+# Selected on rolling-origin seasons 2019-2024 with a stability penalty.
+market_attack_weight = 0.10
+market_defence_weight = 0.20
+market_decay_matchdays = 22.5
+probability_temperature = 1.35
+# Stored checkpoints make these seasons genuine causal replays, not in-sample fits.
+n_backtest_seasons = 12
+
+[params.dixon_coles]
+fit_leagues = ["bl1", "bl2"]
+half_life_seasons = 1.0
+l2 = 0.02
+rho_min = -0.35
+rho_max = 0.35
+max_iter = 500
+newcomer_quantile = 0.2
+min_team_evidence = 10.0

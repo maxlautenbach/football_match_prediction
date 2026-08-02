@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "model_type": "catboost_poisson",
+  "recipe_name": "poisson_blend",
+  "created_at": "2026-08-02T13:12:42.643639+00:00",
+  "holdout_season": 2025,
+  "train_seasons": "2009-2024",
+  "required_columns": [
+    "Team Home",
+    "Team Away",
+    "Saison",
+    "Spieltag",
+    "Wochentag"
+  ],
+  "files": [
+    "away_goals.cbm",
+    "home_goals.cbm",
+    "market_values.joblib",
+    "meta.json",
+    "mv_alias_map.json",
+    "team_aggs.joblib",
+    "team_elo.joblib",
+    "team_form.joblib"
+  ]
+}

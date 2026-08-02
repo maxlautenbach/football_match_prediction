@@ -44,7 +44,8 @@ class CatBoostPoissonModel:
         self._kicktipp_points = build_kicktipp_points_matrix(self.decode_goal_cap)
         self.bundle_dir = art
 
-    def predict(self, X: pd.DataFrame) -> List[str]:
+    def predict_lambdas(self, X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+        """Calibrated per-row home/away goal expectations."""
         feats = build_features(
             X,
             self.market_values,
@@ -56,9 +57,10 @@ class CatBoostPoissonModel:
         )
         lam_home = np.asarray(self.home_model.predict(feats), dtype=float)
         lam_away = np.asarray(self.away_model.predict(feats), dtype=float)
+        return lam_home * self.home_lambda_scale, lam_away * self.away_lambda_scale
 
-        lam_home = lam_home * self.home_lambda_scale
-        lam_away = lam_away * self.away_lambda_scale
+    def predict(self, X: pd.DataFrame) -> List[str]:
+        lam_home, lam_away = self.predict_lambdas(X)
 
         preds: List[str] = []
         for lh, la in zip(lam_home, lam_away):

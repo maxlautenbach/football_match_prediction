@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "model_type": "dixon_coles",
+  "recipe_name": "poisson_blend",
+  "created_at": "2026-08-02T13:12:44.334437+00:00",
+  "holdout_season": 2025,
+  "train_seasons": "2009-2024",
+  "required_columns": [
+    "Team Home",
+    "Team Away",
+    "Saison",
+    "Spieltag",
+    "Wochentag"
+  ],
+  "files": [
+    "checkpoints.joblib",
+    "dixon_coles.json",
+    "ratings.joblib"
+  ]
+}

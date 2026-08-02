@@ -1,0 +1,14 @@
+# Recipe: Kicktipp saison outlook (score-maxing MV / history priors)
+model_type = "saison_ausblick"
+registered_model_name = ""
+
+[params]
+# Softmax temperatures (higher = flatter)
+champion_temperature = 0.85
+herbst_temperature = 1.15
+bottom_temperature = 0.95
+scorer_temperature = 1.05
+# Strength mix
+mv_weight = 1.0
+prior_rank_weight = 0.35
+gf_weight = 0.45

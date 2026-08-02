@@ -11,10 +11,14 @@ import pandas as pd
 from mlflow.tracking import MlflowClient
 
 EXPERIMENT_NAME = "kicktipp"
+SAISON_EXPERIMENT_NAME = "kicktipp-saison"
 DEFAULT_TRACKING_URI = "sqlite:///mlflow.db"
 REGISTERED_MODEL_NAME = "kicktipp-catboost-poisson"
 BASELINE_REGISTERED_MODEL_NAME = "kicktipp-majority-baseline"
 DIXON_COLES_REGISTERED_MODEL_NAME = "kicktipp-dixon-coles"
+MARKET_DIXON_COLES_REGISTERED_MODEL_NAME = "kicktipp-market-dixon-coles"
+POISSON_BLEND_REGISTERED_MODEL_NAME = "kicktipp-poisson-blend"
+SAISON_REGISTERED_MODEL_NAME = "kicktipp-saison-ausblick"
 
 # Canonical aliases
 ALIAS_CANDIDATE = "candidate"

@@ -29,12 +29,19 @@ models/
   common/teams.py             # shared team name normalization
   catboost_poisson/           # main production model
   dixon_coles/                # time-decayed bivariate Poisson ratings
+  market_dixon_coles/         # Dixon-Coles + decaying squad-value prior
   majority_baseline/          # majority-class baseline
+  poisson_blend/              # CatBoost x Dixon-Coles lambda blend
+  saison_ausblick/            # season-start questions (separate experiment)
 recipes/
   catboost_poisson.toml
   dixon_coles.toml
+  market_dixon_coles.toml
   majority_baseline.toml
-scripts/train.py              # generic orchestrator
+  poisson_blend.toml
+  saison_ausblick.toml
+scripts/train.py              # generic match-model orchestrator
+scripts/train_saison.py       # saison outlook → MLflow kicktipp-saison
 scripts/promote_run.py        # validate + atomic promote into artifacts/
 artifacts/                    # production bundle only
 model.py                      # thin public adapter
@@ -65,7 +72,21 @@ Currently implemented:
   earlier, and stored as a lookup table in the bundle. Fitting spans BL1 **and**
   BL2 so promoted teams arrive with a real rating; teams without enough recent
   evidence fall back to a weak-team prior.
+- `market_dixon_coles` — Dixon-Coles goal rates adjusted by each club's
+  season-relative log market value. The squad-value prior decays by matchday as
+  current-season results enter the causal ratings. Its bundle stores enough
+  checkpoints to report rolling-origin scores instead of in-sample diagnostics.
 - `majority_baseline` — majority result of the training data.
+- `poisson_blend` — log-linear blend of the CatBoost and Dixon-Coles goal
+  expectations, decoded through the Dixon-Coles low-score correction. The
+  blend weight is calibrated by replaying the last training seasons as inner
+  holdouts (sub-models retrained on strictly earlier data); the real holdout
+  is never used for weight selection.
+- `saison_ausblick` — season-start Kicktipp questions (Meister, Herbstmeister,
+  Plätze 16–18 unordered trio, Torjäger-Mannschaft). Pure MV/history priors
+  with expected-points decode (6 pts per correct answer, max 24). Uses its own
+  datasets, train script, and MLflow experiment — **not** the match `"H:A"`
+  contract or root `model.py`.
 
 `catboost_poisson` and `dixon_coles` both decode goal expectations into the
 score maximizing expected Kicktipp points (`models/common/kicktipp.py`).
@@ -107,11 +128,24 @@ uv run python scripts/train.py \
   --holdout-season 2025 \
   --skip-delta
 
+# Market-adjusted Dixon-Coles ratings
+uv run python scripts/train.py \
+  --recipe recipes/market_dixon_coles.toml \
+  --holdout-season 2025 \
+  --skip-delta
+
 # Baseline
 uv run python scripts/train.py \
   --recipe recipes/majority_baseline.toml \
   --holdout-season 2025 \
   --skip-delta
+
+# Saison outlook (separate experiment kicktipp-saison — not match artifacts/)
+uv run python scripts/reload_goals.py --start 2009 --end 2025
+uv run python scripts/create_saison_dataset.py --holdout-season 2025
+uv run python scripts/train_saison.py \
+  --recipe recipes/saison_ausblick.toml \
+  --holdout-season 2025
 ```
 
 The generic training script must:
@@ -133,12 +167,17 @@ Use constants from `eval/mlflow_utils.py` (do not hardcode after renames):
 - Experiment: `EXPERIMENT_NAME` (`kicktipp`)
 - Main registered model: `REGISTERED_MODEL_NAME` (`kicktipp-catboost-poisson`)
 - Dixon-Coles registered model: `DIXON_COLES_REGISTERED_MODEL_NAME` (`kicktipp-dixon-coles`)
+- Market Dixon-Coles registered model: `MARKET_DIXON_COLES_REGISTERED_MODEL_NAME` (`kicktipp-market-dixon-coles`)
+- Poisson-blend registered model: `POISSON_BLEND_REGISTERED_MODEL_NAME` (`kicktipp-poisson-blend`)
 - Baseline registered model: `BASELINE_REGISTERED_MODEL_NAME` (`kicktipp-majority-baseline`)
+- Saison experiment: `SAISON_EXPERIMENT_NAME` (`kicktipp-saison`)
+- Saison registered model: `SAISON_REGISTERED_MODEL_NAME` (`kicktipp-saison-ausblick`)
 - Run name: `<model_type>-<recipe_name>-holdout-<season>`
 - Model artifact path: `model`
 - Candidate URI: `models:/kicktipp-catboost-poisson@candidate`
 - Production URI: `models:/kicktipp-catboost-poisson@production`
 - Baseline URI: `models:/kicktipp-majority-baseline@baseline`
+- Saison candidate URI: `models:/kicktipp-saison-ausblick@candidate`
 
 Required run parameters/tags:
 
@@ -148,8 +187,11 @@ Required run parameters/tags:
 - `git_commit` when available
 
 Required metrics come from `eval.metrics`, including `kicktipp_score`,
-`kicktipp_raw`, `exact_accuracy`, `goal_difference_accuracy`, and
-`outcome_accuracy`.
+`kicktipp_raw`, `exact_accuracy`, `goal_difference_accuracy`,
+`outcome_accuracy`, and the holdout extremity diagnostics
+`kicktipp_z_score`, `kicktipp_train_season_mean`, `kicktipp_train_season_std`,
+`n_train_seasons` (holdout Kicktipp vs the distribution of per-season scores
+on the training years).
 
 Each model type has its own registered model name. Shared scoring contract
 stays in root `model.py` + `models/contract.py`.
@@ -161,6 +203,7 @@ Compare the candidate against production on the same holdout, then run:
 ```bash
 uv run python scripts/promote_run.py \
   --alias candidate \
+  --registered-model kicktipp-poisson-blend \
   --backup \
   --set-production-alias
 ```
@@ -174,8 +217,9 @@ uv run python scripts/promote_run.py \
   --dst artifacts_baseline
 ```
 
-(Only promote the main CatBoost model into production `artifacts/` used by
-`scripts/predict.py` / the scheduler.)
+(Promote the chosen production model into `artifacts/` used by
+`scripts/predict.py` / the scheduler — currently `poisson_blend` via
+`kicktipp-poisson-blend`.)
 
 Promotion must:
 

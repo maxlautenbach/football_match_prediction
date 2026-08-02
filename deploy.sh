@@ -18,10 +18,16 @@ tar -czf "$ARCHIVE" \
     --exclude='*.log' \
     --exclude='prediction_*.csv' \
     --exclude='.DS_Store' \
+    --exclude='.env' \
     --exclude='mlflow.db' \
     --exclude='mlruns' \
     --exclude='mlartifacts' \
     --exclude='artifacts_prev' \
+    --exclude='.mlflow_promote_tmp' \
+    --exclude='datasets' \
+    --exclude='v4' \
+    --exclude='evaluation_template' \
+    --exclude='docs' \
     --exclude="$ARCHIVE" \
     .
 

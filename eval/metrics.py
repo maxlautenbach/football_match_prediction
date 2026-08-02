@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
+import numpy as np
 import pandas as pd
 
 
@@ -85,6 +86,61 @@ def evaluate_predictions(y_true: pd.Series, y_pred: pd.Series) -> dict[str, Any]
     }
 
 
+def kicktipp_scores_by_season(
+    y_true: pd.Series,
+    y_pred: pd.Series,
+    seasons: pd.Series,
+    *,
+    season_matches: int = 306,
+) -> dict[int, float]:
+    """Per-season Kicktipp scores (norm ``season_matches``) aligned by index."""
+    frame = pd.DataFrame(
+        {
+            "y_true": y_true.reset_index(drop=True),
+            "y_pred": y_pred.reset_index(drop=True),
+            "saison": seasons.reset_index(drop=True).astype(int),
+        }
+    )
+    out: dict[int, float] = {}
+    for saison, group in frame.groupby("saison", sort=True):
+        out[int(saison)] = float(
+            kicktipp_score(group["y_true"], group["y_pred"], season_matches=season_matches)
+        )
+    return out
+
+
+def holdout_kicktipp_z_score(
+    holdout_score: float,
+    train_season_scores: Mapping[int, float],
+) -> dict[str, float]:
+    """How extreme the holdout Kicktipp score is vs train seasons.
+
+    ``kicktipp_z_score = (holdout - mean(train seasons)) / std(train seasons)``
+    with population std (ddof=0). Rough guide: |z| < 1 normal, > 2 unusual.
+    """
+    scores = np.asarray(list(train_season_scores.values()), dtype=float)
+    n = int(scores.size)
+    if n == 0:
+        return {
+            "kicktipp_z_score": float("nan"),
+            "kicktipp_train_season_mean": float("nan"),
+            "kicktipp_train_season_std": float("nan"),
+            "n_train_seasons": 0.0,
+        }
+    mean = float(scores.mean())
+    std = float(scores.std(ddof=0)) if n > 1 else 0.0
+    if std <= 1e-12:
+        z = 0.0 if abs(float(holdout_score) - mean) <= 1e-12 else float("nan")
+    else:
+        z = float((float(holdout_score) - mean) / std)
+    return {
+        "kicktipp_z_score": z,
+        "kicktipp_train_season_mean": mean,
+        "kicktipp_train_season_std": std,
+        "n_train_seasons": float(n),
+    }
+
+
 def print_metrics(name: str, metrics: dict[str, Any]) -> None:
     print(f"\n{name}")
     print(f"  Matches: {metrics['n_matches']}")
@@ -93,3 +149,10 @@ def print_metrics(name: str, metrics: dict[str, Any]) -> None:
     print(f"  Tendenz (1): {metrics['outcome_accuracy']:.2f}%")
     print(f"  Kicktipp raw: {metrics['kicktipp_raw']}")
     print(f"  Kicktipp (norm 306): {metrics['kicktipp_score']}")
+    if "kicktipp_z_score" in metrics and metrics["kicktipp_z_score"] == metrics["kicktipp_z_score"]:
+        print(
+            f"  Kicktipp z-score vs train seasons: {metrics['kicktipp_z_score']:+.2f} "
+            f"(mean={metrics.get('kicktipp_train_season_mean', float('nan')):.1f}, "
+            f"std={metrics.get('kicktipp_train_season_std', float('nan')):.1f}, "
+            f"n={int(metrics.get('n_train_seasons', 0))})"
+        )

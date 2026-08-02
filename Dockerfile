@@ -20,20 +20,25 @@ WORKDIR /app
 COPY pyproject.toml uv.lock* ./
 COPY scripts/ ./scripts/
 COPY eval/ ./eval/
+COPY models/ ./models/
 COPY model.py ./
 COPY evaluation.py ./
 COPY run_scheduler.py ./
-COPY artifacts/ ./artifacts/
-COPY data/ ./data/
 COPY api/ ./api/
 
-RUN uv sync
+# Bake production bundle + match data into image defaults (seeded on start if volumes empty)
+COPY artifacts/ ./.image_artifacts/
+COPY data/ ./.image_data/
+RUN mkdir -p /app/artifacts /app/data \
+    && cp -a /app/.image_artifacts/. /app/artifacts/ \
+    && cp -a /app/.image_data/. /app/data/
 
-RUN mkdir -p /app/data /app/artifacts
+RUN uv sync
 
 ENV PYTHONUNBUFFERED=1
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Persistent dirs (entrypoint seeds them when empty)
 VOLUME ["/app/data", "/app/artifacts"]
 
-ENTRYPOINT ["python", "run_scheduler.py"]
+ENTRYPOINT ["python", "scripts/docker_entrypoint.py"]

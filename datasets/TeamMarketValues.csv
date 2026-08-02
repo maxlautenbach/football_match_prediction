@@ -38,6 +38,7 @@ Team,Saison,MarketValue
 1.FC Köln,2023,81.45
 1.FC Köln,2024,77.38
 1.FC Köln,2025,74.68
+1.FC Köln,2026,123.9
 1.FC Magdeburg,2018,12.65
 1.FC Magdeburg,2022,17.5
 1.FC Magdeburg,2023,18.05
@@ -74,6 +75,7 @@ Team,Saison,MarketValue
 1.FC Union Berlin,2023,160.95
 1.FC Union Berlin,2024,136.05
 1.FC Union Berlin,2025,124.4
+1.FC Union Berlin,2026,109.88
 1.FSV Mainz 05,2009,48.78
 1.FSV Mainz 05,2010,60.6
 1.FSV Mainz 05,2011,52.0
@@ -91,6 +93,7 @@ Team,Saison,MarketValue
 1.FSV Mainz 05,2023,142.88
 1.FSV Mainz 05,2024,175.13
 1.FSV Mainz 05,2025,138.58
+1.FSV Mainz 05,2026,169.2
 Alemannia Aachen,2009,18.85
 Alemannia Aachen,2010,19.93
 Alemannia Aachen,2011,13.4
@@ -122,6 +125,7 @@ Bayer 04 Leverkusen,2022,452.5
 Bayer 04 Leverkusen,2023,658.35
 Bayer 04 Leverkusen,2024,623.35
 Bayer 04 Leverkusen,2025,439.75
+Bayer 04 Leverkusen,2026,513.45
 Borussia Dortmund,2009,109.4
 Borussia Dortmund,2010,169.95
 Borussia Dortmund,2011,215.95
@@ -139,6 +143,7 @@ Borussia Dortmund,2022,567.55
 Borussia Dortmund,2023,494.8
 Borussia Dortmund,2024,508.28
 Borussia Dortmund,2025,438.1
+Borussia Dortmund,2026,464.2
 Borussia Mönchengladbach,2009,55.0
 Borussia Mönchengladbach,2010,66.55
 Borussia Mönchengladbach,2011,88.3
@@ -156,6 +161,7 @@ Borussia Mönchengladbach,2022,241.68
 Borussia Mönchengladbach,2023,165.23
 Borussia Mönchengladbach,2024,187.5
 Borussia Mönchengladbach,2025,153.85
+Borussia Mönchengladbach,2026,136.0
 Dynamo Dresden,2011,15.28
 Dynamo Dresden,2013,10.08
 Dynamo Dresden,2016,15.88
@@ -190,6 +196,7 @@ Eintracht Frankfurt,2022,324.55
 Eintracht Frankfurt,2023,326.65
 Eintracht Frankfurt,2024,431.25
 Eintracht Frankfurt,2025,336.4
+Eintracht Frankfurt,2026,361.85
 Energie Cottbus,2009,20.48
 Energie Cottbus,2010,20.3
 Energie Cottbus,2011,19.53
@@ -220,6 +227,7 @@ FC Augsburg,2022,132.23
 FC Augsburg,2023,140.8
 FC Augsburg,2024,158.88
 FC Augsburg,2025,127.83
+FC Augsburg,2026,164.25
 FC Bayern München,2009,279.55
 FC Bayern München,2010,308.98
 FC Bayern München,2011,356.0
@@ -237,6 +245,7 @@ FC Bayern München,2022,948.95
 FC Bayern München,2023,965.15
 FC Bayern München,2024,953.55
 FC Bayern München,2025,857.5
+FC Bayern München,2026,1080.0
 FC Erzgebirge Aue,2013,12.98
 FC Ingolstadt 04,2010,12.5
 FC Ingolstadt 04,2011,13.45
@@ -263,22 +272,23 @@ FC Schalke 04,2021,43.83
 FC Schalke 04,2022,87.78
 FC Schalke 04,2023,37.7
 FC Schalke 04,2024,38.15
-FC St. Pauli,2009,23.88
-FC St. Pauli,2010,30.5
-FC St. Pauli,2011,21.5
-FC St. Pauli,2013,16.0
-FC St. Pauli,2014,18.83
-FC St. Pauli,2015,21.45
-FC St. Pauli,2016,18.05
-FC St. Pauli,2017,17.88
-FC St. Pauli,2018,21.65
-FC St. Pauli,2019,21.98
-FC St. Pauli,2020,23.23
-FC St. Pauli,2021,25.68
-FC St. Pauli,2022,25.05
-FC St. Pauli,2023,42.08
-FC St. Pauli,2024,65.78
-FC St. Pauli,2025,52.15
+FC Schalke 04,2026,60.33
+FC St.Pauli,2009,23.88
+FC St.Pauli,2010,30.5
+FC St.Pauli,2011,21.5
+FC St.Pauli,2013,16.0
+FC St.Pauli,2014,18.83
+FC St.Pauli,2015,21.45
+FC St.Pauli,2016,18.05
+FC St.Pauli,2017,17.88
+FC St.Pauli,2018,21.65
+FC St.Pauli,2019,21.98
+FC St.Pauli,2020,23.23
+FC St.Pauli,2021,25.68
+FC St.Pauli,2022,25.05
+FC St.Pauli,2023,42.08
+FC St.Pauli,2024,65.78
+FC St.Pauli,2025,52.15
 FSV Frankfurt,2009,11.33
 FSV Frankfurt,2010,11.65
 FSV Frankfurt,2011,13.23
@@ -318,6 +328,7 @@ Hamburger SV,2022,38.78
 Hamburger SV,2023,42.15
 Hamburger SV,2024,64.85
 Hamburger SV,2025,80.35
+Hamburger SV,2026,106.15
 Hannover 96,2009,50.88
 Hannover 96,2010,65.35
 Hannover 96,2011,76.8
@@ -402,6 +413,7 @@ RB Leipzig,2022,486.4
 RB Leipzig,2023,545.4
 RB Leipzig,2024,513.7
 RB Leipzig,2025,422.75
+RB Leipzig,2026,604.8
 Rot-Weiss Ahlen,2009,10.3
 Rot-Weiss Oberhausen,2009,10.53
 Rot-Weiss Oberhausen,2010,9.85
@@ -422,6 +434,7 @@ SC Freiburg,2022,200.95
 SC Freiburg,2023,180.35
 SC Freiburg,2024,186.2
 SC Freiburg,2025,167.7
+SC Freiburg,2026,242.55
 SC Paderborn 07,2009,12.73
 SC Paderborn 07,2010,11.65
 SC Paderborn 07,2011,15.25
@@ -435,9 +448,11 @@ SC Paderborn 07,2021,19.9
 SC Paderborn 07,2022,25.88
 SC Paderborn 07,2023,25.5
 SC Paderborn 07,2024,38.95
+SC Paderborn 07,2026,37.88
 SSV Ulm 1846,2024,21.9
 SV 07 Elversberg,2023,25.28
 SV 07 Elversberg,2024,39.45
+SV 07 Elversberg,2026,51.6
 SV Darmstadt 98,2014,12.85
 SV Darmstadt 98,2015,25.15
 SV Darmstadt 98,2016,25.98
@@ -478,6 +493,7 @@ SV Werder Bremen,2022,89.5
 SV Werder Bremen,2023,134.93
 SV Werder Bremen,2024,132.0
 SV Werder Bremen,2025,143.0
+SV Werder Bremen,2026,149.83
 SpVgg Greuther Fürth,2009,19.45
 SpVgg Greuther Fürth,2010,23.7
 SpVgg Greuther Fürth,2011,26.15
@@ -511,6 +527,7 @@ TSG Hoffenheim,2022,178.8
 TSG Hoffenheim,2023,176.0
 TSG Hoffenheim,2024,187.1
 TSG Hoffenheim,2025,154.85
+TSG Hoffenheim,2026,294.95
 TSV 1860 München,2009,25.38
 TSV 1860 München,2010,26.85
 TSV 1860 München,2011,20.43
@@ -536,6 +553,7 @@ VfB Stuttgart,2022,151.05
 VfB Stuttgart,2023,346.63
 VfB Stuttgart,2024,365.23
 VfB Stuttgart,2025,277.63
+VfB Stuttgart,2026,420.15
 VfL Bochum,2009,39.9
 VfL Bochum,2010,27.25
 VfL Bochum,2011,19.5

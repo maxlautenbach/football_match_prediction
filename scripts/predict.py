@@ -71,6 +71,19 @@ def generate_predictions(save_csv: bool = False, verbose: bool = True) -> pd.Dat
         print("\nStep 3: Preparing data for prediction...")
     
     # Create DataFrame with required columns for Model.predict()
+    # Kicktipp tippabgabe is BL1; keep BL2 out of the tip sheet.
+    if "league" in next_matchday_df.columns:
+        tip_df = next_matchday_df[
+            next_matchday_df["league"].astype(str).str.lower() == "bl1"
+        ].copy()
+        if len(tip_df) == 0:
+            tip_df = next_matchday_df
+        elif verbose and len(tip_df) != len(next_matchday_df):
+            print(
+                f"Filtering to BL1 for Kicktipp: {len(tip_df)}/{len(next_matchday_df)} matches"
+            )
+        next_matchday_df = tip_df.reset_index(drop=True)
+
     prediction_df = pd.DataFrame({
         "Team Home": next_matchday_df["teamHomeName"],
         "Team Away": next_matchday_df["teamAwayName"],

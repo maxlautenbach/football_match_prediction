@@ -1,0 +1,25 @@
+{
+  "goal_cap": 7,
+  "half_life_seasons": 1.0,
+  "l2": 0.02,
+  "rho_bounds": [
+    -0.35,
+    0.35
+  ],
+  "fit_leagues": [
+    "bl1",
+    "bl2"
+  ],
+  "liga": "bl1",
+  "newcomer_quantile": 0.2,
+  "min_team_evidence": 10.0,
+  "home_lambda_scale": 1.0,
+  "away_lambda_scale": 1.0,
+  "probability_temperature": 1.0,
+  "checkpoint_seasons": [
+    2024,
+    2025
+  ],
+  "holdout_season": 2025,
+  "train_seasons": "2009-2024"
+}

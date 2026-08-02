@@ -1,0 +1,37 @@
+# Recipe: log-linear lambda blend of CatBoost Poisson and Dixon-Coles.
+# The blend weight is calibrated on the last training seasons only — the
+# holdout season is never used for weight selection.
+model_type = "poisson_blend"
+# Leave empty to use eval.mlflow_utils.POISSON_BLEND_REGISTERED_MODEL_NAME
+registered_model_name = ""
+
+[params]
+liga = "bl1"
+goal_cap = 7
+# "auto" = pick the weight on the calibration seasons; a float in [0, 1] pins it
+blend_weight = "auto"
+n_calibration_seasons = 2
+weight_grid_step = 0.1
+
+# Sub-model parameters mirror the standalone recipes.
+[params.catboost]
+cb_depth = 6
+cb_lr = 0.03
+cb_l2 = 10.0
+elo_k = 20
+elo_home_adv = 50
+form_window = 5
+iterations = 4000
+val_fraction = 0.15
+min_val = 500
+
+[params.dixon_coles]
+fit_leagues = ["bl1", "bl2"]
+half_life_seasons = 1.0
+l2 = 0.02
+rho_min = -0.35
+rho_max = 0.35
+max_iter = 500
+checkpoint_seasons_back = 2
+newcomer_quantile = 0.2
+min_team_evidence = 10.0

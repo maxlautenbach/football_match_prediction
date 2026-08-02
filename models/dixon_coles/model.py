@@ -27,6 +27,9 @@ class DixonColesModel:
         art = Path(bundle_dir)
         config = json.loads((art / "dixon_coles.json").read_text(encoding="utf-8"))
         self.goal_cap = int(config.get("goal_cap", 7))
+        self.home_lambda_scale = float(config.get("home_lambda_scale", 1.0))
+        self.away_lambda_scale = float(config.get("away_lambda_scale", 1.0))
+        self.probability_temperature = float(config.get("probability_temperature", 1.0))
 
         ratings: pd.DataFrame = joblib.load(art / "ratings.joblib")
         checkpoints: pd.DataFrame = joblib.load(art / "checkpoints.joblib")
@@ -68,13 +71,16 @@ class DixonColesModel:
         pos = int(np.searchsorted(self._keys, _checkpoint_key(season, matchday), side="right")) - 1
         return max(pos, 0)
 
-    def predict(self, X: pd.DataFrame) -> List[str]:
+    def predict_lambdas(self, X: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Per-row (lambda_home, mu_away, rho) from the causal rating table."""
         home = X["Team Home"].map(normalize_team_name)
         away = X["Team Away"].map(normalize_team_name)
         seasons = X["Saison"].astype(int)
         matchdays = X["Spieltag"].astype(int)
 
-        preds: List[str] = []
+        lams: List[float] = []
+        mus: List[float] = []
+        rhos: List[float] = []
         for team_home, team_away, season, matchday in zip(home, away, seasons, matchdays):
             pos = self._checkpoint_for(season, matchday)
             ckpt = self._checkpoints.iloc[pos]
@@ -85,10 +91,27 @@ class DixonColesModel:
             attack_away, defence_away = table.get(team_away, fallback)
 
             intercept = float(ckpt["intercept"])
-            lam = float(np.exp(intercept + float(ckpt["home_advantage"]) + attack_home - defence_away))
-            mu = float(np.exp(intercept + attack_away - defence_home))
+            lams.append(
+                self.home_lambda_scale
+                * float(
+                    np.exp(intercept + float(ckpt["home_advantage"]) + attack_home - defence_away)
+                )
+            )
+            mus.append(
+                self.away_lambda_scale * float(np.exp(intercept + attack_away - defence_home))
+            )
+            rhos.append(float(ckpt["rho"]))
+        return np.asarray(lams), np.asarray(mus), np.asarray(rhos)
 
-            joint = dixon_coles_joint_probs(lam, mu, float(ckpt["rho"]), self.goal_cap)
+    def predict(self, X: pd.DataFrame) -> List[str]:
+        lam_arr, mu_arr, rho_arr = self.predict_lambdas(X)
+
+        preds: List[str] = []
+        for lam, mu, rho in zip(lam_arr, mu_arr, rho_arr):
+            joint = dixon_coles_joint_probs(float(lam), float(mu), float(rho), self.goal_cap)
+            if self.probability_temperature != 1.0:
+                joint = np.power(joint, self.probability_temperature)
+                joint /= float(joint.sum())
             h, a = kicktipp_optimal_score_from_joint(joint, self.goal_cap, self._points_matrix)
             preds.append(f"{h}:{a}")
         return preds

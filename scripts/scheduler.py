@@ -544,6 +544,11 @@ def schedule_next_prediction() -> Optional[datetime.datetime]:
         return None
 
 
+def _skip_startup_job() -> bool:
+    """True if SCHEDULER_SKIP_STARTUP_JOB is set (schedule only, no tip on boot)."""
+    return os.getenv("SCHEDULER_SKIP_STARTUP_JOB", "").strip().lower() in ("1", "true", "yes")
+
+
 class PredictionScheduler:
     """Scheduler for prediction jobs."""
     
@@ -557,7 +562,14 @@ class PredictionScheduler:
         print(f"Scheduled job started at {datetime.datetime.now()}")
         print(f"{'='*60}\n")
         
-        logs, next_job_datetime = run_prediction_job()
+        try:
+            logs, next_job_datetime = run_prediction_job()
+        except Exception as e:
+            logs = f"FATAL in prediction job: {e}\n"
+            import traceback
+            logs += traceback.format_exc()
+            print(logs)
+            next_job_datetime = schedule_next_prediction()
         
         # Add next job info to logs
         if next_job_datetime:
@@ -587,7 +599,7 @@ class PredictionScheduler:
         if self.next_job_id:
             try:
                 self.scheduler.remove_job(self.next_job_id)
-            except:
+            except Exception:
                 pass
         
         # Schedule new job
@@ -602,18 +614,24 @@ class PredictionScheduler:
         print(f"Scheduled prediction job for: {job_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
     
     def run_startup_test_job(self):
-        """Run test job on startup."""
+        """Run tip+upload once on startup, then schedule the next matchday job."""
         os.environ["SCHEDULER_DEBUG"] = "1"
         print(f"\n{'='*60}")
-        print("Running startup test job... (SCHEDULER_DEBUG=1 for scheduling details)")
+        print("Running startup job... (SCHEDULER_DEBUG=1 for scheduling details)")
         print(f"{'='*60}\n")
         
-        logs, next_job_datetime = run_prediction_job()
+        try:
+            logs, next_job_datetime = run_prediction_job()
+        except Exception as e:
+            logs = f"FATAL in startup prediction job: {e}\n"
+            import traceback
+            logs += traceback.format_exc()
+            print(logs)
+            next_job_datetime = schedule_next_prediction()
         
         # Schedule the next regular job if available
         if next_job_datetime:
             logs += f"\n\nNächster geplanter Job: {next_job_datetime.strftime('%Y-%m-%d %H:%M:%S')}"
-            # Schedule the next regular job
             self.schedule_job(next_job_datetime)
         else:
             logs += "\n\n⚠️ KEIN WEITERER JOB EINGEPLANT"
@@ -622,20 +640,45 @@ class PredictionScheduler:
         
         # Send email
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        subject = f"[Football Prediction] Startup Test Job Completed - {timestamp}"
+        subject = f"[Football Prediction] Startup Job Completed - {timestamp}"
         email_sent = send_email(subject, logs)
         if not email_sent:
             print("WARNING: Email could not be sent. Check SMTP configuration.")
         
-        print("\nStartup test job completed!")
+        print("\nStartup job completed!")
+
+    def schedule_only_on_startup(self):
+        """Schedule the next job without tipping (useful on redeploy)."""
+        os.environ.setdefault("SCHEDULER_DEBUG", "1")
+        print(f"\n{'='*60}")
+        print("SCHEDULER_SKIP_STARTUP_JOB=1 — scheduling next job only (no tip on boot)")
+        print(f"{'='*60}\n")
+        next_job_datetime = schedule_next_prediction()
+        if next_job_datetime:
+            self.schedule_job(next_job_datetime)
+        else:
+            print("No next job could be scheduled (check data/next_matchday_df.pck).")
     
     def start(self):
         """Start the scheduler."""
         print("Starting scheduler...")
         print(f"Current time: {datetime.datetime.now()}")
+        print(f"DATA_DIR={DATA_DIR}")
+        print(f"Artifacts ready check: {(BASE_DIR / 'artifacts' / 'bundle.json').exists()}")
+
+        # Ensure next_matchday exists before scheduling
+        try:
+            from data_loader import update_match_data_delta, update_next_matchday_df
+
+            update_match_data_delta(data_dir=DATA_DIR, verbose=True)
+            update_next_matchday_df(data_dir=DATA_DIR, verbose=True)
+        except Exception as e:
+            print(f"WARNING: delta/next_matchday refresh failed: {e}")
         
-        # Run startup test job
-        self.run_startup_test_job()
+        if _skip_startup_job():
+            self.schedule_only_on_startup()
+        else:
+            self.run_startup_test_job()
         
         # Start scheduler (will run continuously)
         print("\nScheduler running. Waiting for scheduled jobs...")
