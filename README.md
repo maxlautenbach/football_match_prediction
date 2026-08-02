@@ -1,6 +1,6 @@
 # Football match prediction
 
-Kicktipp-oriented Bundesliga prediction with CatBoost Poisson models, season holdout evaluation, and local MLflow tracking.
+Kicktipp-oriented Bundesliga prediction with CatBoost Poisson and Dixon-Coles models, season holdout evaluation, and local MLflow tracking.
 
 ## Setup
 
@@ -16,9 +16,16 @@ Default: train on seasons **before** 2025, evaluate on **2025** (2025/26).
 
 ```zsh
 uv run python scripts/create_datasets.py --holdout-season 2025
-uv run python scripts/train.py --holdout-season 2025
+
+# Train into a temp bundle → MLflow (does NOT overwrite artifacts/)
+uv run python scripts/train.py --recipe recipes/catboost_poisson.toml --holdout-season 2025
+uv run python scripts/train.py --recipe recipes/dixon_coles.toml --holdout-season 2025
+uv run python scripts/train.py --recipe recipes/majority_baseline.toml --holdout-season 2025
+
 uv run python -m eval.compare --holdout-season 2025 --baseline majority
 ```
+
+See [`docs/MODELS.md`](docs/MODELS.md) and [`AGENTS.md`](AGENTS.md) for the models/ + recipes/ convention.
 
 Form/Elo are built causally over train+holdout history; model weights fit on train labels only.
 
@@ -28,16 +35,22 @@ Form/Elo are built causally over train+holdout history; model weights fit on tra
 uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
 ```
 
+Artifact files live under `mlruns/` (gitignored) — do not delete that folder while using the local registry.
+
 Training logs:
 - **Datasets** (train + holdout) via `mlflow.log_input`
-- **pyfunc model** + **Model Registry** entry `bundesliga-kicktipp` with alias `@candidate`
+- **CatBoost pyfunc** → `kicktipp-catboost-poisson` `@candidate` / `@production`
+- **Dixon-Coles pyfunc** → `kicktipp-dixon-coles` `@candidate`
+- **Majority baseline** → `kicktipp-majority-baseline` `@baseline`
+
+Experiment: `kicktipp` (`sqlite:///mlflow.db`).
 
 ```zsh
 # Promote candidate into local artifacts/ and mark @production
 uv run python scripts/promote_run.py --alias candidate --backup --set-production-alias
 
 # Or by URI / run id
-uv run python scripts/promote_run.py --model-uri 'models:/bundesliga-kicktipp@candidate' --backup
+uv run python scripts/promote_run.py --model-uri 'models:/kicktipp-catboost-poisson@candidate' --backup
 uv run python scripts/promote_run.py --run-id <RUN_ID> --backup
 ```
 
@@ -71,12 +84,15 @@ Market values fall back to `datasets/TeamMarketValues.csv` if `data/market_value
 
 ```
 api/                 # OpenLigaDB / Transfermarkt clients
-artifacts/           # Production model bundle
+artifacts/           # Production model bundle (promote only)
 data/                # match_df_*.pck, market values
 datasets/            # train.csv / holdout test.csv
+docs/MODELS.md       # model convention (authoritative)
+models/              # model types (catboost_poisson, dixon_coles, majority_baseline, …)
+recipes/             # TOML recipes for training
 eval/                # metrics, baselines, compare, mlflow helpers
-scripts/             # train, predict, scheduler, …
-model.py
+scripts/             # train, promote, predict, scheduler, …
+model.py             # thin public Model adapter
 evaluation.py        # thin wrapper → eval.compare
 ```
 

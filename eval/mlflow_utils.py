@@ -10,9 +10,16 @@ import mlflow
 import pandas as pd
 from mlflow.tracking import MlflowClient
 
-EXPERIMENT_NAME = "bundesliga-kicktipp"
+EXPERIMENT_NAME = "kicktipp"
 DEFAULT_TRACKING_URI = "sqlite:///mlflow.db"
-REGISTERED_MODEL_NAME = "bundesliga-kicktipp"
+REGISTERED_MODEL_NAME = "kicktipp-catboost-poisson"
+BASELINE_REGISTERED_MODEL_NAME = "kicktipp-majority-baseline"
+DIXON_COLES_REGISTERED_MODEL_NAME = "kicktipp-dixon-coles"
+
+# Canonical aliases
+ALIAS_CANDIDATE = "candidate"
+ALIAS_PRODUCTION = "production"
+ALIAS_BASELINE = "baseline"
 
 
 def setup_mlflow(

@@ -1,0 +1,7 @@
+# Recipe: majority-class Kicktipp baseline
+model_type = "majority_baseline"
+# Leave empty to use eval.mlflow_utils.BASELINE_REGISTERED_MODEL_NAME
+registered_model_name = ""
+
+[params]
+liga = "bl1"

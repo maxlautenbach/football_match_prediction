@@ -1,0 +1,17 @@
+# Recipe: default CatBoost Poisson home/away goals model
+model_type = "catboost_poisson"
+# Leave empty to use eval.mlflow_utils.REGISTERED_MODEL_NAME
+registered_model_name = ""
+
+[params]
+liga = "bl1"
+goal_cap = 7
+cb_depth = 6
+cb_lr = 0.03
+cb_l2 = 10.0
+elo_k = 20
+elo_home_adv = 50
+form_window = 5
+iterations = 4000
+val_fraction = 0.15
+min_val = 500

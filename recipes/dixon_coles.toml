@@ -1,0 +1,18 @@
+# Recipe: time-decayed Dixon-Coles bivariate Poisson ratings
+model_type = "dixon_coles"
+# Leave empty to use eval.mlflow_utils.DIXON_COLES_REGISTERED_MODEL_NAME
+registered_model_name = ""
+
+[params]
+liga = "bl1"
+# Fit on both leagues so promoted teams arrive with a real rating
+fit_leagues = ["bl1", "bl2"]
+goal_cap = 7
+half_life_seasons = 1.0
+l2 = 0.02
+rho_min = -0.35
+rho_max = 0.35
+max_iter = 500
+checkpoint_seasons_back = 2
+newcomer_quantile = 0.2
+min_team_evidence = 10.0

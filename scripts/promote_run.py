@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -18,19 +19,79 @@ from eval.mlflow_utils import (
     setup_mlflow,
 )
 from mlflow.tracking import MlflowClient
+from model import Model
+from models.contract import read_bundle_json
 
 ARTIFACTS_DIR = BASE_DIR / "artifacts"
 
 
 def _find_bundle(root: Path) -> Path:
-    """Locate directory containing meta.json inside a downloaded model tree."""
-    if (root / "meta.json").exists():
+    """Locate directory containing bundle.json (or legacy meta.json) inside a download."""
+    if (root / "bundle.json").exists() or (root / "meta.json").exists():
         return root
-    # pyfunc layout: .../model/artifacts/bundle/meta.json
-    candidates = list(root.rglob("meta.json"))
-    if not candidates:
-        raise FileNotFoundError(f"No meta.json under {root}")
-    return candidates[0].parent
+    # Prefer bundle.json over legacy meta.json
+    for name in ("bundle.json", "meta.json"):
+        candidates = list(root.rglob(name))
+        if candidates:
+            return candidates[0].parent
+    raise FileNotFoundError(f"No bundle.json or meta.json under {root}")
+
+
+def _validate_bundle(bundle_dir: Path) -> None:
+    """Validate bundle metadata and that Model can load + smoke-predict."""
+    if (bundle_dir / "bundle.json").exists():
+        meta = read_bundle_json(bundle_dir)
+        print(
+            f"bundle.json: model_type={meta['model_type']} "
+            f"recipe={meta.get('recipe_name')} schema={meta.get('schema_version')}"
+        )
+        for fname in meta.get("files") or []:
+            if not (bundle_dir / fname).exists():
+                raise FileNotFoundError(f"bundle.json lists missing file: {fname}")
+    else:
+        print("WARNING: no bundle.json — accepting legacy meta.json bundle")
+
+    model = Model(artifacts_dir=bundle_dir)
+    import pandas as pd
+
+    smoke = pd.DataFrame(
+        {
+            "Team Home": ["FC Bayern München"],
+            "Team Away": ["Borussia Dortmund"],
+            "Saison": [2025],
+            "Spieltag": [1],
+            "Wochentag": ["Saturday"],
+        }
+    )
+    preds = model.predict(smoke)
+    print(f"Smoke prediction OK: {preds[0]}")
+
+
+def _atomic_replace(src: Path, dst: Path) -> None:
+    """Replace dst with src contents via temp dir + rename."""
+    parent = dst.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".artifacts_staging_", dir=str(parent)))
+    staging_bundle = staging / "bundle"
+    shutil.copytree(src, staging_bundle)
+
+    backup_existing = None
+    if dst.exists():
+        backup_existing = parent / f".{dst.name}_swap_old"
+        if backup_existing.exists():
+            shutil.rmtree(backup_existing)
+        dst.rename(backup_existing)
+
+    try:
+        staging_bundle.rename(dst)
+    except Exception:
+        if backup_existing is not None and backup_existing.exists() and not dst.exists():
+            backup_existing.rename(dst)
+        raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+        if backup_existing is not None and backup_existing.exists():
+            shutil.rmtree(backup_existing, ignore_errors=True)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -41,12 +102,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--model-uri",
         default=None,
-        help="e.g. models:/bundesliga-kicktipp@candidate or models:/bundesliga-kicktipp/1",
+        help=f"e.g. models:/{REGISTERED_MODEL_NAME}@candidate or models:/name/1",
     )
     parser.add_argument(
         "--alias",
         default=None,
         help=f"Promote registry model '{REGISTERED_MODEL_NAME}' by alias (e.g. candidate)",
+    )
+    parser.add_argument(
+        "--registered-model",
+        default=REGISTERED_MODEL_NAME,
+        help="Registered model name when using --alias / --set-production-alias",
     )
     parser.add_argument(
         "--set-production-alias",
@@ -62,6 +128,7 @@ def main(argv: list[str] | None = None) -> None:
 
     setup_mlflow()
     dst: Path = args.dst
+    registered_name = args.registered_model
 
     if args.backup and dst.exists():
         backup = dst.parent / f"{dst.name}_prev"
@@ -75,38 +142,42 @@ def main(argv: list[str] | None = None) -> None:
         shutil.rmtree(tmp)
 
     version_for_alias: str | None = None
-    if args.alias:
-        model_uri = f"models:/{REGISTERED_MODEL_NAME}@{args.alias}"
-        print(f"Downloading {model_uri} ...")
-        local = download_model_uri(model_uri, tmp)
-        client = MlflowClient()
-        mv = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, args.alias)
-        version_for_alias = mv.version
-    elif args.model_uri:
-        print(f"Downloading {args.model_uri} ...")
-        local = download_model_uri(args.model_uri, tmp)
-        # Try parse models:/name/version
-        if args.model_uri.startswith("models:/") and "/" in args.model_uri.split(":", 1)[1]:
-            parts = args.model_uri.replace("models:/", "").split("/")
-            if len(parts) == 2 and parts[1].isdigit():
-                version_for_alias = parts[1]
-    else:
-        print(f"Downloading run {args.run_id} artifacts ...")
-        local = download_run_artifacts(args.run_id, tmp, artifact_path="model")
+    try:
+        if args.alias:
+            model_uri = f"models:/{registered_name}@{args.alias}"
+            print(f"Downloading {model_uri} ...")
+            local = download_model_uri(model_uri, tmp)
+            client = MlflowClient()
+            mv = client.get_model_version_by_alias(registered_name, args.alias)
+            version_for_alias = mv.version
+        elif args.model_uri:
+            print(f"Downloading {args.model_uri} ...")
+            local = download_model_uri(args.model_uri, tmp)
+            if args.model_uri.startswith("models:/"):
+                parts = args.model_uri.replace("models:/", "").split("/")
+                if len(parts) == 2 and parts[1].isdigit():
+                    version_for_alias = parts[1]
+                    # Prefer name from URI when setting production alias
+                    registered_name = parts[0].split("@")[0]
+        else:
+            print(f"Downloading run {args.run_id} artifacts ...")
+            local = download_run_artifacts(args.run_id, tmp, artifact_path="model")
 
-    source = _find_bundle(local if local.exists() else tmp)
+        source = _find_bundle(local if local.exists() else tmp)
+        print(f"Validating bundle at {source} ...")
+        _validate_bundle(source)
 
-    if dst.exists():
-        shutil.rmtree(dst)
-    shutil.copytree(source, dst)
-    shutil.rmtree(tmp, ignore_errors=True)
-    print(f"Promoted → {dst}")
+        print(f"Promoting → {dst}")
+        _atomic_replace(source, dst)
+        print(f"Promoted → {dst}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
     if args.set_production_alias:
         if version_for_alias is None:
             raise SystemExit("--set-production-alias requires --alias or models:/name/version URI")
-        set_model_alias(REGISTERED_MODEL_NAME, "production", version_for_alias)
-        print(f"Set alias @{REGISTERED_MODEL_NAME}@production → v{version_for_alias}")
+        set_model_alias(registered_name, "production", version_for_alias)
+        print(f"Set alias {registered_name}@production → v{version_for_alias}")
 
 
 if __name__ == "__main__":

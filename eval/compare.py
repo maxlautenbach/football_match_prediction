@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--artifacts-dir", type=Path, default=BASE_DIR / "artifacts")
     parser.add_argument("--prev-artifacts-dir", type=Path, default=None)
     parser.add_argument("--baseline", choices=["majority", "none"], default="majority")
-    parser.add_argument("--log-mlflow", action="store_true", default=True)
+    parser.add_argument("--log-mlflow", action="store_true", default=False)
     parser.add_argument("--no-log-mlflow", action="store_false", dest="log_mlflow")
     parser.add_argument("--run-name-prefix", type=str, default="compare")
     args = parser.parse_args(argv)
@@ -81,7 +81,7 @@ def main(argv: list[str] | None = None) -> None:
         with mlflow.start_run(run_name=f"{args.run_name_prefix}-{args.artifacts_dir.name}"):
             log_params(
                 {
-                    "model_type": "catboost_poisson",
+                    "model_type": getattr(model, "model_type", None) or "unknown",
                     "artifacts_dir": str(args.artifacts_dir),
                     "holdout_season": args.holdout_season,
                 }
@@ -98,7 +98,7 @@ def main(argv: list[str] | None = None) -> None:
             with mlflow.start_run(run_name=f"{args.run_name_prefix}-{args.prev_artifacts_dir.name}"):
                 log_params(
                     {
-                        "model_type": "catboost_poisson",
+                        "model_type": getattr(prev, "model_type", None) or "unknown",
                         "artifacts_dir": str(args.prev_artifacts_dir),
                         "holdout_season": args.holdout_season,
                     }
@@ -116,7 +116,7 @@ def main(argv: list[str] | None = None) -> None:
             with mlflow.start_run(run_name=f"{args.run_name_prefix}-majority"):
                 log_params(
                     {
-                        "model_type": "majority",
+                        "model_type": "majority_baseline",
                         "majority_class": maj,
                         "holdout_season": args.holdout_season,
                     }

@@ -82,19 +82,11 @@ def generate_predictions(save_csv: bool = False, verbose: bool = True) -> pd.Dat
     # Step 4: Load model and make predictions
     if verbose:
         print("\nStep 4: Making predictions...")
-    model = Model()
-    
-    if not model.ready:
-        if verbose:
-            print("Warning: Model not ready. Using fallback predictions.")
-        predictions = ["0:0"] * len(prediction_df)
-        prediction_probabilities = [0.0] * len(prediction_df)
-    else:
-        predictions = model.predict(prediction_df)
-        
-        # Get prediction probabilities (simplified - would need model internals for exact probs)
-        # For now, we'll use a placeholder
-        prediction_probabilities = [0.15] * len(predictions)  # Placeholder
+    model = Model()  # raises RuntimeError if artifacts/ missing or invalid
+    predictions = model.predict(prediction_df)
+
+    # Placeholder confidence (exact probs need model internals)
+    prediction_probabilities = [0.15] * len(predictions)
     
     # Step 5: Create results DataFrame
     if verbose:
