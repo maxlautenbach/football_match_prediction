@@ -166,3 +166,11 @@ node_modules/
 package-lock.json
 *.DS_Store
 *AutogluonModels*
+
+# MLflow local tracking
+mlruns/
+mlartifacts/
+mlflow.db
+.mlflow_promote_tmp/
+artifacts_prev/
+deploy.tar.gz

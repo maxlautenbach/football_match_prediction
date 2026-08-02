@@ -1,0 +1,18 @@
+services:
+  football-prediction:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    platform: linux/amd64
+    container_name: football-prediction-scheduler
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+    shm_size: '2gb'
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    stdin_open: true
+    tty: true

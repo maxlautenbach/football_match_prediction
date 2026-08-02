@@ -1,0 +1,39 @@
+# Use Selenium Standalone Chrome as base - already includes Chrome, ChromeDriver and all dependencies
+FROM selenium/standalone-chrome:latest
+
+# Install Python 3.11 and pip
+USER root
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    python3.11 \
+    python3.11-dev \
+    python3.11-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
+    ln -sf /usr/bin/python3.11 /usr/bin/python3
+
+RUN python3.11 -m ensurepip --upgrade
+RUN python3.11 -m pip install --no-cache-dir uv
+
+WORKDIR /app
+
+COPY pyproject.toml uv.lock* ./
+COPY scripts/ ./scripts/
+COPY eval/ ./eval/
+COPY model.py ./
+COPY evaluation.py ./
+COPY run_scheduler.py ./
+COPY artifacts/ ./artifacts/
+COPY data/ ./data/
+COPY api/ ./api/
+
+RUN uv sync
+
+RUN mkdir -p /app/data /app/artifacts
+
+ENV PYTHONUNBUFFERED=1
+ENV PATH="/app/.venv/bin:$PATH"
+
+VOLUME ["/app/data", "/app/artifacts"]
+
+ENTRYPOINT ["python", "run_scheduler.py"]
