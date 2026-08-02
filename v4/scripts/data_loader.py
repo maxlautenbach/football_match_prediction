@@ -6,6 +6,7 @@ new or changed matches from the API. Option A: Individual API calls per match.
 """
 
 import datetime
+import os
 import pickle
 import sys
 from pathlib import Path
@@ -333,6 +334,59 @@ def find_next_match_day(match_df: pd.DataFrame) -> pd.DataFrame:
     
     # No future matches at all
     return match_df.iloc[0:0].copy()
+
+
+def refresh_current_season_from_api(
+    data_dir: Optional[Path] = None,
+    current_date: Optional[datetime.datetime] = None,
+    verbose: bool = True,
+    leagues: Optional[list[str]] = None,
+) -> None:
+    """
+    Re-fetch the current season from the OpenLigaDB API and overwrite match_df_{season}.pck.
+    Use when data is stale or corrupted (e.g. set REFRESH_CURRENT_SEASON_FROM_API=1 in env).
+
+    Args:
+        data_dir: Directory for pickle files. Defaults to DATA_DIR.
+        current_date: Date to determine current season. Defaults to now.
+        verbose: Whether to print progress.
+        leagues: Leagues to fetch, e.g. ["bl1", "bl2"]. Defaults to ["bl1"].
+    """
+    if data_dir is None:
+        data_dir = DATA_DIR
+    if current_date is None:
+        current_date = datetime.datetime.now()
+    if leagues is None:
+        leagues = ["bl1"]
+
+    season = get_current_season(current_date)
+    if verbose:
+        print(f"REFRESH_CURRENT_SEASON_FROM_API: Loading season {season} from API ({', '.join(leagues)})...")
+
+    rows = []
+    for league in leagues:
+        try:
+            json_list = openligadb.get_all_season_matches(league, season)
+            for match_json in json_list:
+                rows.append(extract_match_data(match_json, league=league))
+            if verbose:
+                print(f"  {league}: {len(json_list)} matches")
+        except Exception as e:
+            if verbose:
+                print(f"  {league}: failed - {e}")
+
+    if not rows:
+        if verbose:
+            print("  No data fetched, skipping save.")
+        return
+
+    match_df = pd.DataFrame(rows)
+    out_file = data_dir / f"match_df_{season}.pck"
+    pickle.dump(match_df, open(out_file, "wb"))
+    if verbose:
+        print(f"  Saved {len(match_df)} matches to {out_file.name}")
+
+    update_next_matchday_df(data_dir=data_dir, current_date=current_date, verbose=verbose)
 
 
 def update_next_matchday_df(

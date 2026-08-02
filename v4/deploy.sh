@@ -40,7 +40,7 @@ done
 
 # Deploy to CapRover with all provided flags (except -t)
 echo "Deploying to CapRover..."
-caprover deploy -t ../v4.tar.gz "${DEPLOY_ARGS[@]}"
+caprover deploy -t ../v4.tar.gz "${DEPLOY_ARGS[@]}" --default
 
 echo ""
 echo "Deployment completed!"

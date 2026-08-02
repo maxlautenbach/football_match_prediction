@@ -23,9 +23,68 @@ SCRIPTS_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR))
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from data_loader import get_current_season
+from data_loader import get_current_season, refresh_current_season_from_api
 
 DATA_DIR = BASE_DIR / "data"
+
+def _is_scheduler_debug() -> bool:
+    """True if SCHEDULER_DEBUG env is set (e.g. for startup job debugging)."""
+    return os.getenv("SCHEDULER_DEBUG", "").strip().lower() in ("1", "true", "yes")
+
+
+def _is_refresh_current_season_from_api() -> bool:
+    """True if REFRESH_CURRENT_SEASON_FROM_API env is set (fix stale/corrupt data)."""
+    return os.getenv("REFRESH_CURRENT_SEASON_FROM_API", "").strip().lower() in ("1", "true", "yes")
+
+
+def _debug_schedule(
+    next_matchday_df: pd.DataFrame,
+    current_matchday: int,
+    current_season: int,
+    match_df: Optional[pd.DataFrame],
+    latest_from_full: Optional[datetime.datetime],
+    latest_used: datetime.datetime,
+    next_job: datetime.datetime,
+) -> None:
+    """Print scheduling debug when SCHEDULER_DEBUG=1."""
+    if not _is_scheduler_debug():
+        return
+    wd = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+    print("\n" + "=" * 60)
+    print("SCHEDULER DEBUG (SCHEDULER_DEBUG=1)")
+    print("=" * 60)
+    print(f"next_matchday_df: Spieltag {current_matchday}, Saison {current_season}, {len(next_matchday_df)} Spiele")
+    dates_nmd = next_matchday_df["date"].tolist()
+    for i, d in enumerate(dates_nmd):
+        dt = d.to_pydatetime() if hasattr(d, "to_pydatetime") else d
+        day = wd[dt.weekday()] if hasattr(dt, "weekday") else ""
+        print(f"  [{i+1}] {dt} ({day})")
+    nmd_max = next_matchday_df["date"].max()
+    if hasattr(nmd_max, "to_pydatetime"):
+        nmd_max = nmd_max.to_pydatetime()
+    print(f"  -> next_matchday_df['date'].max() = {nmd_max} ({wd[nmd_max.weekday()]})")
+    print()
+    if match_df is not None:
+        subset = match_df[
+            (match_df["matchDay"] == current_matchday)
+            & (match_df["season"] == current_season)
+        ]
+        print(f"match_df (full season): {len(match_df)} Spiele, davon Spieltag {current_matchday}: {len(subset)} Spiele")
+        for _, row in subset.sort_values("date").iterrows():
+            d = row["date"]
+            dt = d.to_pydatetime() if hasattr(d, "to_pydatetime") else d
+            day = wd[dt.weekday()] if hasattr(dt, "weekday") else ""
+            print(f"  {dt} ({day})")
+        if latest_from_full is not None:
+            print(f"  -> get_latest_match_start_for_matchday() = {latest_from_full} ({wd[latest_from_full.weekday()]})")
+        else:
+            print("  -> get_latest_match_start_for_matchday() = None (Fallback auf next_matchday_df)")
+    else:
+        print("match_df: nicht geladen (Datei fehlt?)")
+    print()
+    print(f"latest_match_start (verwendet): {latest_used} ({wd[latest_used.weekday()]})")
+    print(f"next_job = latest + 3h:         {next_job} ({wd[next_job.weekday()]})")
+    print("=" * 60 + "\n")
 
 
 def send_email(
@@ -266,6 +325,11 @@ def run_prediction_job() -> tuple[str, Optional[datetime.datetime]]:
     logs.append("=" * 60)
     logs.append(f"Started at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logs.append("")
+
+    if _is_refresh_current_season_from_api():
+        logs.append("REFRESH_CURRENT_SEASON_FROM_API=1: Refreshing current season from API...")
+        refresh_current_season_from_api(data_dir=DATA_DIR, verbose=True)
+        logs.append("")
     
     # Run predict.py directly (no CSV saving)
     logs.append("Running predictions (no CSV save)...")
@@ -417,11 +481,13 @@ def schedule_next_prediction() -> Optional[datetime.datetime]:
             if pickle_file.exists():
                 match_df = pd.DataFrame(pickle.load(open(pickle_file, "rb")))
             
+            latest_from_full = None
             latest_match_start = None
             if match_df is not None:
-                latest_match_start = get_latest_match_start_for_matchday(
+                latest_from_full = get_latest_match_start_for_matchday(
                     match_df, current_matchday, current_season
                 )
+                latest_match_start = latest_from_full
             if latest_match_start is None:
                 latest_match_start = next_matchday_df["date"].max()
             
@@ -451,6 +517,17 @@ def schedule_next_prediction() -> Optional[datetime.datetime]:
             
             # Schedule for latest match start + 3 hours
             next_job_datetime = latest_match_start + datetime.timedelta(hours=3)
+            
+            if _is_scheduler_debug():
+                _debug_schedule(
+                    next_matchday_df=next_matchday_df,
+                    current_matchday=int(current_matchday),
+                    current_season=int(current_season),
+                    match_df=match_df,
+                    latest_from_full=latest_from_full,
+                    latest_used=latest_match_start,
+                    next_job=next_job_datetime,
+                )
             
             print(f"Current matchday: {current_matchday}, latest match starts: {latest_match_start.strftime('%Y-%m-%d %H:%M')}, scheduling job for: {next_job_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
         
@@ -526,8 +603,9 @@ class PredictionScheduler:
     
     def run_startup_test_job(self):
         """Run test job on startup."""
+        os.environ["SCHEDULER_DEBUG"] = "1"
         print(f"\n{'='*60}")
-        print("Running startup test job...")
+        print("Running startup test job... (SCHEDULER_DEBUG=1 for scheduling details)")
         print(f"{'='*60}\n")
         
         logs, next_job_datetime = run_prediction_job()
