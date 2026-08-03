@@ -1,7 +1,9 @@
 """Container entrypoint: seed data/artifacts volumes, then start the scheduler.
 
 CapRover persistent directories can mount empty volumes over COPY'd paths.
-If the mount is empty, we restore the image defaults baked at build time.
+Match data is filled in only when missing (volumes keep live refreshes).
+Production artifacts are always synced from the image so model/MV updates
+take effect on every redeploy without manually wiping the volume.
 """
 
 from __future__ import annotations
@@ -33,14 +35,12 @@ def _is_empty_dir(path: Path) -> bool:
         return True
 
 
-def _seed(src: Path, dst: Path, marker: str) -> None:
+def _seed_missing(src: Path, dst: Path) -> None:
+    """Copy image defaults into dst only where the target path is absent."""
     if not src.exists():
         print(f"[entrypoint] No image defaults at {src}, skipping seed for {dst}")
         return
     dst.mkdir(parents=True, exist_ok=True)
-    marker_path = dst / marker
-    if marker_path.exists():
-        return
     if not _is_empty_dir(dst):
         print(f"[entrypoint] Seeding missing defaults into non-empty {dst} ...")
     else:
@@ -56,10 +56,28 @@ def _seed(src: Path, dst: Path, marker: str) -> None:
     print(f"[entrypoint] Seed complete for {dst}")
 
 
+def _sync_tree(src: Path, dst: Path) -> None:
+    """Overwrite dst with src contents (files + directories)."""
+    if not src.exists():
+        print(f"[entrypoint] No image defaults at {src}, skipping sync for {dst}")
+        return
+    dst.mkdir(parents=True, exist_ok=True)
+    print(f"[entrypoint] Syncing {dst} from {src} (overwrite) ...")
+    for item in src.iterdir():
+        target = dst / item.name
+        if item.is_dir():
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(item, target)
+        else:
+            shutil.copy2(item, target)
+    print(f"[entrypoint] Sync complete for {dst}")
+
+
 def main() -> None:
     print(f"[entrypoint] APP={APP}")
-    _seed(DEFAULT_DATA, DATA, "match_df_2026.pck")
-    _seed(DEFAULT_ARTIFACTS, ARTIFACTS, "bundle.json")
+    _seed_missing(DEFAULT_DATA, DATA)
+    _sync_tree(DEFAULT_ARTIFACTS, ARTIFACTS)
 
     # Replace this process with the scheduler so signals/PID stay clean.
     scheduler = APP / "run_scheduler.py"
