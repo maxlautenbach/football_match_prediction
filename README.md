@@ -138,6 +138,10 @@ SMTP_USER=...
 SMTP_PASSWORD=...
 ```
 
+After each tip job the scheduler sends an HTML digest (tips for the next matchday plus
+performance for the previous archived matchday: Kicktipp points, expected points, Δ, z-score).
+Tips are stored under `data/tips/` — keep that directory on the persistent `data` volume.
+
 ## CapRover deploy
 
 Production image runs `run_scheduler.py` (predict + Kicktipp upload on schedule). Image includes:

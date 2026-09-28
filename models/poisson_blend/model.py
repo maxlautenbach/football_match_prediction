@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 import numpy as np
 import pandas as pd
@@ -22,7 +22,7 @@ import pandas as pd
 from models.catboost_poisson import model as cb_model
 from models.common.kicktipp import (
     build_kicktipp_points_matrix,
-    kicktipp_optimal_score_from_joint,
+    kicktipp_optimal_with_diagnostics,
 )
 from models.dixon_coles import model as dc_model
 from models.dixon_coles.ratings import dixon_coles_joint_probs
@@ -40,6 +40,33 @@ def blend_lambdas(
     return np.exp((1.0 - weight) * np.log(lam_cb) + weight * np.log(lam_dc))
 
 
+def decode_blended_diagnostics(
+    cb_home: np.ndarray,
+    cb_away: np.ndarray,
+    dc_home: np.ndarray,
+    dc_away: np.ndarray,
+    rho: np.ndarray,
+    weight: float,
+    goal_cap: int,
+    points_matrix: np.ndarray,
+) -> List[dict[str, Any]]:
+    lam_home = blend_lambdas(cb_home, dc_home, weight)
+    lam_away = blend_lambdas(cb_away, dc_away, weight)
+
+    out: List[dict[str, Any]] = []
+    for lam, mu, r in zip(lam_home, lam_away, rho):
+        joint = dixon_coles_joint_probs(float(lam), float(mu), float(r), goal_cap)
+        diag = kicktipp_optimal_with_diagnostics(joint, goal_cap, points_matrix)
+        out.append(
+            {
+                "tip": str(diag["tip"]),
+                "expected_points": float(diag["expected_points"]),
+                "variance": float(diag["variance"]),
+            }
+        )
+    return out
+
+
 def decode_blended(
     cb_home: np.ndarray,
     cb_away: np.ndarray,
@@ -50,15 +77,19 @@ def decode_blended(
     goal_cap: int,
     points_matrix: np.ndarray,
 ) -> List[str]:
-    lam_home = blend_lambdas(cb_home, dc_home, weight)
-    lam_away = blend_lambdas(cb_away, dc_away, weight)
-
-    preds: List[str] = []
-    for lam, mu, r in zip(lam_home, lam_away, rho):
-        joint = dixon_coles_joint_probs(float(lam), float(mu), float(r), goal_cap)
-        h, a = kicktipp_optimal_score_from_joint(joint, goal_cap, points_matrix)
-        preds.append(f"{h}:{a}")
-    return preds
+    return [
+        d["tip"]
+        for d in decode_blended_diagnostics(
+            cb_home,
+            cb_away,
+            dc_home,
+            dc_away,
+            rho,
+            weight,
+            goal_cap,
+            points_matrix,
+        )
+    ]
 
 
 class PoissonBlendModel:
@@ -76,9 +107,12 @@ class PoissonBlendModel:
         self.bundle_dir = art
 
     def predict(self, X: pd.DataFrame) -> List[str]:
+        return [d["tip"] for d in self.predict_with_diagnostics(X)]
+
+    def predict_with_diagnostics(self, X: pd.DataFrame) -> List[dict[str, Any]]:
         cb_home, cb_away = self.catboost.predict_lambdas(X)
         dc_home, dc_away, rho = self.dixon_coles.predict_lambdas(X)
-        return decode_blended(
+        return decode_blended_diagnostics(
             cb_home,
             cb_away,
             dc_home,

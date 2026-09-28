@@ -10,7 +10,7 @@ Algorithm-specific code lives under `models/<model_type>/`.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 import pandas as pd
 
@@ -40,11 +40,46 @@ class Model:
                 raise RuntimeError(msg) from e
             print(f"WARNING: {msg}")
 
-    def predict(self, X: pd.DataFrame) -> List[str]:
+    def _ensure_ready(self) -> None:
         if not self.ready or self._impl is None:
             err = self._load_error or RuntimeError("Model artifacts not loaded")
             raise RuntimeError(
                 f"Model not ready (artifacts={self.artifacts_dir}): {err}"
             ) from (self._load_error if isinstance(self._load_error, Exception) else None)
+
+    def predict(self, X: pd.DataFrame) -> List[str]:
+        self._ensure_ready()
         preds = self._impl.predict(X)
         return validate_predictions(list(preds), len(X))
+
+    def predict_with_diagnostics(self, X: pd.DataFrame) -> List[dict[str, Any]]:
+        """Return tip strings plus optional expected points / variance.
+
+        Implementations that expose ``predict_with_diagnostics`` are preferred.
+        Otherwise falls back to ``predict()`` with NaN expected/variance.
+        """
+        self._ensure_ready()
+        impl = self._impl
+        if hasattr(impl, "predict_with_diagnostics"):
+            rows = list(impl.predict_with_diagnostics(X))
+            tips = validate_predictions([str(r.get("tip", "")) for r in rows], len(X))
+            out: List[dict[str, Any]] = []
+            for tip, row in zip(tips, rows):
+                out.append(
+                    {
+                        "tip": tip,
+                        "expected_points": float(row.get("expected_points", float("nan"))),
+                        "variance": float(row.get("variance", float("nan"))),
+                    }
+                )
+            return out
+
+        tips = validate_predictions(list(impl.predict(X)), len(X))
+        return [
+            {
+                "tip": tip,
+                "expected_points": float("nan"),
+                "variance": float("nan"),
+            }
+            for tip in tips
+        ]

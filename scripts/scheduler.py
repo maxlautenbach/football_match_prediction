@@ -7,11 +7,11 @@ import datetime
 import os
 import pickle
 import smtplib
-import subprocess
 import sys
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -24,6 +24,7 @@ sys.path.insert(0, str(BASE_DIR))
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from data_loader import get_current_season, refresh_current_season_from_api
+from email_digest import build_digest_html, build_digest_subject, build_digest_text
 
 DATA_DIR = BASE_DIR / "data"
 
@@ -95,18 +96,20 @@ def send_email(
     smtp_port: Optional[int] = None,
     smtp_user: Optional[str] = None,
     smtp_password: Optional[str] = None,
+    html_body: Optional[str] = None,
 ) -> bool:
     """
-    Send email with logs.
+    Send email with logs / digest.
     
     Args:
         subject: Email subject
-        body: Email body (logs)
+        body: Plain-text body
         receiver: Email receiver (from env if not provided)
         smtp_server: SMTP server (default: smtp.gmail.com)
         smtp_port: SMTP port (default: 587)
         smtp_user: SMTP username (optional)
         smtp_password: SMTP password (optional)
+        html_body: Optional HTML alternative body
         
     Returns:
         bool: True if email sent successfully
@@ -135,10 +138,18 @@ def send_email(
             print(f"  Please set SMTP_USER and SMTP_PASSWORD in .env file")
             return False
         
-        msg = MIMEText(body, "plain", "utf-8")
-        msg["Subject"] = subject
-        msg["From"] = smtp_user
-        msg["To"] = receiver
+        if html_body:
+            msg: MIMEText | MIMEMultipart = MIMEMultipart("alternative")
+            msg["Subject"] = subject
+            msg["From"] = smtp_user
+            msg["To"] = receiver
+            msg.attach(MIMEText(body, "plain", "utf-8"))
+            msg.attach(MIMEText(html_body, "html", "utf-8"))
+        else:
+            msg = MIMEText(body, "plain", "utf-8")
+            msg["Subject"] = subject
+            msg["From"] = smtp_user
+            msg["To"] = receiver
         
         # Send email
         try:
@@ -309,106 +320,182 @@ def get_next_run_time(
     return next_job
 
 
-def run_prediction_job() -> tuple[str, Optional[datetime.datetime]]:
+def _load_season_match_df(season: int) -> Optional[pd.DataFrame]:
+    pickle_file = DATA_DIR / f"match_df_{int(season)}.pck"
+    if not pickle_file.exists():
+        return None
+    return pd.DataFrame(pickle.load(open(pickle_file, "rb")))
+
+
+def _build_and_send_digest(
+    *,
+    logs: str,
+    next_job_datetime: Optional[datetime.datetime],
+    tips_df: Optional[pd.DataFrame],
+    performance: Optional[dict[str, Any]],
+    season_stand: Optional[dict[str, Any]],
+    startup: bool = False,
+) -> bool:
+    next_job_s = (
+        next_job_datetime.strftime("%Y-%m-%d %H:%M:%S") if next_job_datetime else None
+    )
+    subject = build_digest_subject(
+        performance=performance,
+        tips_df=tips_df,
+        startup=startup,
+    )
+    text_body = build_digest_text(
+        performance=performance,
+        season_stand=season_stand,
+        tips_df=tips_df,
+        next_job=next_job_s,
+        ops_footer=logs,
+    )
+    html_body = build_digest_html(
+        performance=performance,
+        season_stand=season_stand,
+        tips_df=tips_df,
+        next_job=next_job_s,
+        ops_footer=logs,
+    )
+    return send_email(subject, text_body, html_body=html_body)
+
+
+def run_prediction_job() -> dict[str, Any]:
     """
-    Run prediction and upload job.
-    
+    Run prediction, archive tips, upload, and score previous matchday.
+
     Returns:
-        tuple: (logs, next_job_datetime)
+        dict with logs, next_job_datetime, tips_df, performance, season_stand
     """
     import io
     from contextlib import redirect_stdout, redirect_stderr
-    
-    logs = []
+
+    from eval.matchday_report import find_previous_scorable_matchday, season_standing
+    from predict import generate_predictions
+    from upload_predictions import upload_predictions_to_platform
+
+    logs: list[str] = []
     logs.append("=" * 60)
     logs.append("Football Prediction Job")
     logs.append("=" * 60)
     logs.append(f"Started at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logs.append("")
 
+    results_df: Optional[pd.DataFrame] = None
+    performance: Optional[dict[str, Any]] = None
+    season_stand: Optional[dict[str, Any]] = None
+
     if _is_refresh_current_season_from_api():
         logs.append("REFRESH_CURRENT_SEASON_FROM_API=1: Refreshing current season from API...")
         refresh_current_season_from_api(data_dir=DATA_DIR, verbose=True)
         logs.append("")
-    
-    # Run predict.py directly (no CSV saving)
-    logs.append("Running predictions (no CSV save)...")
+
+    logs.append("Running predictions (archive tips)...")
     logs.append("-" * 60)
     try:
-        # Import and call directly to avoid CSV creation
-        from scripts.predict import generate_predictions
-        
-        # Capture stdout/stderr
         stdout_capture = io.StringIO()
         stderr_capture = io.StringIO()
-        
+
         with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-            results_df = generate_predictions(save_csv=False, verbose=True)
-        
+            results_df = generate_predictions(save_csv=False, verbose=True, archive_tips=True)
+
         stdout_output = stdout_capture.getvalue()
         stderr_output = stderr_capture.getvalue()
-        
+
         logs.append(stdout_output)
         if stderr_output:
             logs.append("STDERR:")
             logs.append(stderr_output)
-        
-        # Also print to console for visibility
+
         print(stdout_output)
         if stderr_output:
             print("STDERR:", stderr_output)
-            
+
     except Exception as e:
         error_msg = f"ERROR running predictions: {e}"
         logs.append(error_msg)
         print(error_msg)
         import traceback
+
         tb = traceback.format_exc()
         logs.append(tb)
         print(tb)
-    
+
+    if results_df is not None and len(results_df) > 0:
+        tip_season = int(results_df["Season"].iloc[0])
+        tip_matchday = int(results_df["Matchday"].iloc[0])
+        match_df = _load_season_match_df(tip_season)
+        if match_df is not None:
+            try:
+                performance = find_previous_scorable_matchday(
+                    tip_season, tip_matchday, match_df
+                )
+                if performance is not None:
+                    logs.append("")
+                    logs.append(
+                        f"Previous matchday {performance['matchday']}: "
+                        f"{performance['points']} pts "
+                        f"(E={performance.get('expected')}, "
+                        f"z={performance.get('z_score')})"
+                    )
+                up_to = (
+                    int(performance["matchday"])
+                    if performance is not None
+                    else tip_matchday - 1
+                )
+                if up_to >= 1:
+                    season_stand = season_standing(
+                        tip_season, match_df, up_to_matchday=up_to
+                    )
+            except Exception as e:
+                logs.append(f"WARNING: matchday scoring failed: {e}")
+                print(f"WARNING: matchday scoring failed: {e}")
+
     logs.append("")
     logs.append("-" * 60)
-    logs.append("Running upload_predictions.py --submit...")
+    logs.append("Uploading predictions to Kicktipp...")
     logs.append("-" * 60)
-    
-    # Run upload_predictions.py --submit
-    try:
-        result = subprocess.run(
-            [sys.executable, str(BASE_DIR / "scripts" / "upload_predictions.py"), "--submit"],
-            capture_output=True,
-            text=True,
-            cwd=str(BASE_DIR),
-        )
-        logs.append(result.stdout)
-        print(result.stdout)  # Print to console
-        if result.stderr:
-            logs.append("STDERR:")
-            logs.append(result.stderr)
-            print("STDERR:", result.stderr)  # Print to console
-        if result.returncode != 0:
-            warning = f"WARNING: upload_predictions.py exited with code {result.returncode}"
-            logs.append(warning)
-            print(warning)
-    except Exception as e:
-        error_msg = f"ERROR running upload_predictions.py: {e}"
-        logs.append(error_msg)
-        print(error_msg)
-        import traceback
-        tb = traceback.format_exc()
-        logs.append(tb)
-        print(tb)
-    
+
+    if results_df is not None and len(results_df) > 0:
+        try:
+            stdout_capture = io.StringIO()
+            stderr_capture = io.StringIO()
+            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                upload_predictions_to_platform(results_df, auto_submit=True)
+            stdout_output = stdout_capture.getvalue()
+            stderr_output = stderr_capture.getvalue()
+            logs.append(stdout_output)
+            print(stdout_output)
+            if stderr_output:
+                logs.append("STDERR:")
+                logs.append(stderr_output)
+                print("STDERR:", stderr_output)
+        except Exception as e:
+            error_msg = f"ERROR uploading predictions: {e}"
+            logs.append(error_msg)
+            print(error_msg)
+            import traceback
+
+            tb = traceback.format_exc()
+            logs.append(tb)
+            print(tb)
+    else:
+        logs.append("Skipping upload: no predictions available")
+
     logs.append("")
     logs.append("=" * 60)
     logs.append(f"Job completed at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logs.append("=" * 60)
-    
-    # Determine next job time
+
     next_job_datetime = schedule_next_prediction()
-    
-    log_text = "\n".join(logs)
-    return log_text, next_job_datetime
+    return {
+        "logs": "\n".join(logs),
+        "next_job_datetime": next_job_datetime,
+        "tips_df": results_df,
+        "performance": performance,
+        "season_stand": season_stand,
+    }
 
 
 def schedule_next_prediction() -> Optional[datetime.datetime]:
@@ -557,37 +644,48 @@ class PredictionScheduler:
         self.next_job_id = None
     
     def job_wrapper(self):
-        """Wrapper for scheduled job that sends email after execution."""
+        """Wrapper for scheduled job that sends digest email after execution."""
         print(f"\n{'='*60}")
         print(f"Scheduled job started at {datetime.datetime.now()}")
         print(f"{'='*60}\n")
-        
+
+        tips_df = None
+        performance = None
+        season_stand = None
         try:
-            logs, next_job_datetime = run_prediction_job()
+            result = run_prediction_job()
+            logs = result["logs"]
+            next_job_datetime = result["next_job_datetime"]
+            tips_df = result.get("tips_df")
+            performance = result.get("performance")
+            season_stand = result.get("season_stand")
         except Exception as e:
             logs = f"FATAL in prediction job: {e}\n"
             import traceback
+
             logs += traceback.format_exc()
             print(logs)
             next_job_datetime = schedule_next_prediction()
-        
-        # Add next job info to logs
+
         if next_job_datetime:
             logs += f"\n\nNächster geplanter Job: {next_job_datetime.strftime('%Y-%m-%d %H:%M:%S')}"
-            # Schedule the next regular job
             self.schedule_job(next_job_datetime)
         else:
             logs += "\n\n⚠️ KEIN WEITERER JOB EINGEPLANT"
             logs += "\nDies war vermutlich der letzte Spieltag der Saison (Spieltag 34)."
             logs += "\nDie Saison ist beendet. Keine weiteren Predictions werden automatisch geplant."
-        
-        # Send email
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        subject = f"[Football Prediction] Job Completed - {timestamp}"
-        email_sent = send_email(subject, logs)
+
+        email_sent = _build_and_send_digest(
+            logs=logs,
+            next_job_datetime=next_job_datetime,
+            tips_df=tips_df,
+            performance=performance,
+            season_stand=season_stand,
+            startup=False,
+        )
         if not email_sent:
             print("WARNING: Email could not be sent. Check SMTP configuration.")
-    
+
     def schedule_job(self, job_datetime: datetime.datetime):
         """
         Schedule a prediction job at the specified datetime.
@@ -619,17 +717,25 @@ class PredictionScheduler:
         print(f"\n{'='*60}")
         print("Running startup job... (SCHEDULER_DEBUG=1 for scheduling details)")
         print(f"{'='*60}\n")
-        
+
+        tips_df = None
+        performance = None
+        season_stand = None
         try:
-            logs, next_job_datetime = run_prediction_job()
+            result = run_prediction_job()
+            logs = result["logs"]
+            next_job_datetime = result["next_job_datetime"]
+            tips_df = result.get("tips_df")
+            performance = result.get("performance")
+            season_stand = result.get("season_stand")
         except Exception as e:
             logs = f"FATAL in startup prediction job: {e}\n"
             import traceback
+
             logs += traceback.format_exc()
             print(logs)
             next_job_datetime = schedule_next_prediction()
-        
-        # Schedule the next regular job if available
+
         if next_job_datetime:
             logs += f"\n\nNächster geplanter Job: {next_job_datetime.strftime('%Y-%m-%d %H:%M:%S')}"
             self.schedule_job(next_job_datetime)
@@ -637,14 +743,18 @@ class PredictionScheduler:
             logs += "\n\n⚠️ KEIN WEITERER JOB EINGEPLANT"
             logs += "\nDies war vermutlich der letzte Spieltag der Saison (Spieltag 34)."
             logs += "\nDie Saison ist beendet. Keine weiteren Predictions werden automatisch geplant."
-        
-        # Send email
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        subject = f"[Football Prediction] Startup Job Completed - {timestamp}"
-        email_sent = send_email(subject, logs)
+
+        email_sent = _build_and_send_digest(
+            logs=logs,
+            next_job_datetime=next_job_datetime,
+            tips_df=tips_df,
+            performance=performance,
+            season_stand=season_stand,
+            startup=True,
+        )
         if not email_sent:
             print("WARNING: Email could not be sent. Check SMTP configuration.")
-        
+
         print("\nStartup job completed!")
 
     def schedule_only_on_startup(self):

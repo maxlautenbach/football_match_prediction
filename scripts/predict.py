@@ -4,33 +4,38 @@ Uses Delta-Logic Option A to update data before making predictions
 Optionally uploads predictions to betting platform
 """
 
-import os
 import pickle
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
-import numpy as np
 import pandas as pd
 
 # Add BASE_DIR to path for imports
 BASE_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(BASE_DIR))
+sys.path.insert(0, str(BASE_DIR / "scripts"))
 
 from data_loader import update_match_data_delta, update_next_matchday_df
 from model import Model
+from tip_archive import save_tips
 
 DATA_DIR = BASE_DIR / "data"
 
 
-def generate_predictions(save_csv: bool = False, verbose: bool = True) -> pd.DataFrame:
+def generate_predictions(
+    save_csv: bool = False,
+    verbose: bool = True,
+    *,
+    archive_tips: bool = True,
+) -> pd.DataFrame:
     """
     Generate predictions for next matchday.
     
     Args:
         save_csv: Whether to save predictions to CSV file
         verbose: Whether to print progress messages
+        archive_tips: Persist tips under data/tips/ for later matchday scoring
         
     Returns:
         DataFrame with predictions
@@ -96,10 +101,10 @@ def generate_predictions(save_csv: bool = False, verbose: bool = True) -> pd.Dat
     if verbose:
         print("\nStep 4: Making predictions...")
     model = Model()  # raises RuntimeError if artifacts/ missing or invalid
-    predictions = model.predict(prediction_df)
-
-    # Placeholder confidence (exact probs need model internals)
-    prediction_probabilities = [0.15] * len(predictions)
+    diagnostics = model.predict_with_diagnostics(prediction_df)
+    predictions = [d["tip"] for d in diagnostics]
+    expected_points = [float(d["expected_points"]) for d in diagnostics]
+    variances = [float(d["variance"]) for d in diagnostics]
     
     # Step 5: Create results DataFrame
     if verbose:
@@ -137,7 +142,8 @@ def generate_predictions(save_csv: bool = False, verbose: bool = True) -> pd.Dat
         "Matchday": next_matchday_df["matchDay"],
         "Season": next_matchday_df["season"],
         "Prediction": predictions,
-        "Prediction_Probability": prediction_probabilities,
+        "Expected_Points": expected_points,
+        "Variance": variances,
         "Home_Value": home_values,
         "Away_Value": away_values,
     })
@@ -147,10 +153,11 @@ def generate_predictions(save_csv: bool = False, verbose: bool = True) -> pd.Dat
         print("\n" + "=" * 60)
         print("MATCH PREDICTIONS")
         print("=" * 60)
-        for idx, row in results_df.iterrows():
-            confidence = row["Prediction_Probability"] * 100
+        for _, row in results_df.iterrows():
+            exp = row["Expected_Points"]
+            exp_s = f"E[pts]={exp:.2f}" if exp == exp else "E[pts]=n/a"
             print(f"{row['Home_Team']} vs {row['Away_Team']}")
-            print(f"  → {row['Prediction']} (Confidence: {confidence:.1f}%)")
+            print(f"  → {row['Prediction']} ({exp_s})")
             print()
     
     # Step 7: Save predictions to CSV (optional)
@@ -160,6 +167,11 @@ def generate_predictions(save_csv: bool = False, verbose: bool = True) -> pd.Dat
         results_df.to_csv(output_path, index=False)
         if verbose:
             print(f"Predictions saved to: {output_path}")
+
+    if archive_tips:
+        archive_path = save_tips(results_df)
+        if verbose:
+            print(f"Tips archived to: {archive_path}")
     
     if verbose:
         print("\n" + "=" * 60)
@@ -180,4 +192,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

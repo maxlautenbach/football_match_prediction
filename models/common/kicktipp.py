@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Tuple
+from typing import Any, Tuple
 
 import numpy as np
 
@@ -61,6 +61,41 @@ def poisson_probs(lam: float, goal_cap: int) -> np.ndarray:
     return p
 
 
+def tip_expectation_from_joint(
+    tip_idx: int,
+    joint_probs: np.ndarray,
+    points_matrix: np.ndarray,
+) -> tuple[float, float]:
+    """Expected Kicktipp points and variance for a fixed tip under ``joint_probs``."""
+    joint = np.asarray(joint_probs, dtype=np.float64).reshape(-1)
+    tip_pts = np.asarray(points_matrix[int(tip_idx)], dtype=np.float64).reshape(-1)
+    expected = float(np.dot(tip_pts, joint))
+    second = float(np.dot(tip_pts * tip_pts, joint))
+    variance = max(0.0, second - expected * expected)
+    return expected, variance
+
+
+def kicktipp_optimal_with_diagnostics(
+    joint_probs: np.ndarray,
+    goal_cap: int,
+    points_matrix: np.ndarray,
+) -> dict[str, Any]:
+    """EV-optimal tip plus expected points and variance under the joint."""
+    joint = np.asarray(joint_probs, dtype=np.float64).reshape(-1)
+    exp_pts = points_matrix @ joint
+    idx = int(np.argmax(exp_pts))
+    k = goal_cap + 1
+    home, away = idx // k, idx % k
+    expected, variance = tip_expectation_from_joint(idx, joint, points_matrix)
+    return {
+        "tip": f"{home}:{away}",
+        "home": int(home),
+        "away": int(away),
+        "expected_points": float(expected),
+        "variance": float(variance),
+    }
+
+
 def kicktipp_optimal_score_from_joint(
     joint_probs: np.ndarray,
     goal_cap: int,
@@ -70,10 +105,8 @@ def kicktipp_optimal_score_from_joint(
 
     `joint_probs` is a flattened (goal_cap+1)^2 grid indexed by home*k + away.
     """
-    exp_pts = points_matrix @ np.asarray(joint_probs, dtype=np.float64).reshape(-1)
-    idx = int(np.argmax(exp_pts))
-    k = goal_cap + 1
-    return idx // k, idx % k
+    diag = kicktipp_optimal_with_diagnostics(joint_probs, goal_cap, points_matrix)
+    return int(diag["home"]), int(diag["away"])
 
 
 def kicktipp_optimal_score(

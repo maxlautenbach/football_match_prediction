@@ -36,23 +36,31 @@ def calculate_goal_difference_accuracy(y_true: pd.Series, y_pred: pd.Series) -> 
     return (correct / total * 100) if total > 0 else 0.0
 
 
+def kicktipp_points_one(true_str: str, pred_str: str) -> int | None:
+    """Kicktipp points for one match: 5 / 3 / 1 / 0, or None if unparsable."""
+    true_home, true_away = parse_result(true_str)
+    pred_home, pred_away = parse_result(pred_str)
+    if true_home is None or pred_home is None:
+        return None
+    if true_home == pred_home and true_away == pred_away:
+        return 5
+    if (true_home - true_away) == (pred_home - pred_away):
+        return 3
+    if (
+        (true_home > true_away and pred_home > pred_away)
+        or (true_home < true_away and pred_home < pred_away)
+        or (true_home == true_away and pred_home == pred_away)
+    ):
+        return 1
+    return 0
+
+
 def kicktipp_raw_points(y_true: pd.Series, y_pred: pd.Series) -> int:
     score_value = 0
     for true_str, pred_str in zip(y_true, y_pred):
-        true_home, true_away = parse_result(true_str)
-        pred_home, pred_away = parse_result(pred_str)
-        if true_home is None or pred_home is None:
-            continue
-        if true_home == pred_home and true_away == pred_away:
-            score_value += 5
-        elif (true_home - true_away) == (pred_home - pred_away):
-            score_value += 3
-        elif (
-            (true_home > true_away and pred_home > pred_away)
-            or (true_home < true_away and pred_home < pred_away)
-            or (true_home == true_away and pred_home == pred_away)
-        ):
-            score_value += 1
+        pts = kicktipp_points_one(str(true_str), str(pred_str))
+        if pts is not None:
+            score_value += pts
     return int(score_value)
 
 
