@@ -23,6 +23,10 @@ def tip_archive_path(
     return root / f"season_{int(season)}_md_{int(matchday)}.json"
 
 
+def _match_key(home: str, away: str) -> str:
+    return f"{home.strip().lower()}|{away.strip().lower()}"
+
+
 def save_tips(
     results_df: pd.DataFrame,
     *,
@@ -30,6 +34,9 @@ def save_tips(
     created_at: Optional[datetime] = None,
 ) -> Path:
     """Write tip archive JSON for the matchday in ``results_df``.
+
+    Merges into an existing archive by home/away so a partial mid-matchday
+    re-tip cannot wipe earlier tips for the same matchday.
 
     Expected columns: Home_Team, Away_Team, Date, Matchday, Season, Prediction,
     and optionally Expected_Points, Variance.
@@ -43,7 +50,15 @@ def save_tips(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     ts = created_at or datetime.now(timezone.utc)
-    matches: list[dict[str, Any]] = []
+    by_key: dict[str, dict[str, Any]] = {}
+
+    existing = load_tips(season, matchday, tips_dir=tips_dir)
+    if existing:
+        for m in existing.get("matches") or []:
+            key = _match_key(str(m.get("home_team", "")), str(m.get("away_team", "")))
+            if key != "|":
+                by_key[key] = m
+
     for _, row in results_df.iterrows():
         date_val = row.get("Date")
         if hasattr(date_val, "isoformat"):
@@ -62,17 +77,18 @@ def save_tips(
         except (TypeError, ValueError):
             var_f = float("nan")
 
-        matches.append(
-            {
-                "home_team": str(row["Home_Team"]),
-                "away_team": str(row["Away_Team"]),
-                "date": date_str,
-                "tip": str(row["Prediction"]),
-                "expected_points": exp_f,
-                "variance": var_f,
-            }
-        )
+        home = str(row["Home_Team"])
+        away = str(row["Away_Team"])
+        by_key[_match_key(home, away)] = {
+            "home_team": home,
+            "away_team": away,
+            "date": date_str,
+            "tip": str(row["Prediction"]),
+            "expected_points": exp_f,
+            "variance": var_f,
+        }
 
+    matches = list(by_key.values())
     payload = {
         "season": season,
         "matchday": matchday,

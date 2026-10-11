@@ -23,10 +23,19 @@ SCRIPTS_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR))
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from data_loader import get_current_season, refresh_current_season_from_api
+from data_loader import (
+    get_current_season,
+    refresh_current_season_from_api,
+    sync_season_leagues_from_api,
+    update_next_matchday_df,
+)
 from email_digest import build_digest_html, build_digest_subject, build_digest_text
 
 DATA_DIR = BASE_DIR / "data"
+
+# Kicktipp tips are BL1 only — schedule off that league's kickoffs.
+TIP_LEAGUE = "bl1"
+MATCHDAY_END_BUFFER = datetime.timedelta(hours=3)
 
 def _is_scheduler_debug() -> bool:
     """True if SCHEDULER_DEBUG env is set (e.g. for startup job debugging)."""
@@ -241,53 +250,102 @@ def detect_matchday_end(match_df: pd.DataFrame) -> Optional[datetime.datetime]:
     return latest_matchday["end_date"]
 
 
+def _to_datetime(value: Any) -> datetime.datetime:
+    if isinstance(value, pd.Timestamp):
+        return value.to_pydatetime()
+    if isinstance(value, datetime.datetime):
+        return value
+    return datetime.datetime.combine(value, datetime.time(20, 30))
+
+
+def _league_mask(df: pd.DataFrame, league: str = TIP_LEAGUE) -> pd.Series:
+    if len(df) == 0:
+        return pd.Series(dtype=bool)
+    if "league" not in df.columns:
+        return pd.Series(True, index=df.index)
+    return df["league"].astype(str).str.lower() == str(league).lower()
+
+
 def get_latest_match_start_for_matchday(
-    match_df: pd.DataFrame, matchday: int, season: int
+    match_df: pd.DataFrame,
+    matchday: int,
+    season: int,
+    league: str = TIP_LEAGUE,
 ) -> Optional[datetime.datetime]:
     """
     Get the latest match start time for a given matchday from the full match dataframe.
 
     Uses the complete season data so the next run is scheduled after the real matchday end
     (e.g. Sunday evening), even when next_matchday_df only contains a subset of matches.
-
-    Args:
-        match_df: Full match DataFrame for the season
-        matchday: Matchday number
-        season: Season year (start year)
-
-    Returns:
-        datetime of the latest match start in that matchday, or None if no matches found
+    Defaults to BL1 (Kicktipp league).
     """
     subset = match_df[
         (match_df["matchDay"] == matchday) & (match_df["season"] == season)
     ]
+    subset = subset[_league_mask(subset, league)]
     if len(subset) == 0:
         return None
-    latest = subset["date"].max()
-    if isinstance(latest, pd.Timestamp):
-        return latest.to_pydatetime()
-    if isinstance(latest, datetime.datetime):
-        return latest
-    # date-only fallback
-    return datetime.datetime.combine(latest, datetime.time(20, 30))
+    return _to_datetime(subset["date"].max())
+
+
+def matchday_in_progress(
+    match_df: pd.DataFrame,
+    matchday: int,
+    season: int,
+    league: str = TIP_LEAGUE,
+) -> bool:
+    """True if the matchday has both completed and still-future matches (BL1 by default)."""
+    subset = match_df[
+        (match_df["matchDay"] == matchday) & (match_df["season"] == season)
+    ]
+    subset = subset[_league_mask(subset, league)]
+    if len(subset) == 0:
+        return False
+    has_future = bool((subset["status"] == "future").any())
+    has_done = bool((subset["status"] != "future").any())
+    return has_future and has_done
+
+
+def defer_until_after_in_progress_matchday(
+    match_df: pd.DataFrame,
+    next_matchday_df: pd.DataFrame,
+    current_date: Optional[datetime.datetime] = None,
+    league: str = TIP_LEAGUE,
+) -> Optional[datetime.datetime]:
+    """
+    If find_next_match_day points at an in-progress matchday and we are still before
+    that matchday's real end (+ buffer), return the defer target. Otherwise None.
+
+    Prevents Saturday partial re-tips / digest mails when the scheduler fired too early.
+    """
+    if current_date is None:
+        current_date = datetime.datetime.now()
+    if len(next_matchday_df) == 0:
+        return None
+    matchday = int(next_matchday_df["matchDay"].iloc[0])
+    season = int(next_matchday_df["season"].iloc[0])
+    if not matchday_in_progress(match_df, matchday, season, league=league):
+        return None
+    latest = get_latest_match_start_for_matchday(
+        match_df, matchday, season, league=league
+    )
+    if latest is None:
+        latest = _to_datetime(next_matchday_df["date"].max())
+    target = latest + MATCHDAY_END_BUFFER
+    if current_date < target:
+        return target
+    return None
 
 
 def get_next_run_time(
     match_df: pd.DataFrame,
     next_matchday_df: pd.DataFrame,
     current_date: Optional[datetime.datetime] = None,
+    league: str = TIP_LEAGUE,
 ) -> Optional[datetime.datetime]:
     """
     Compute the next job run time from match data only (no file I/O).
     Used for unit tests and mirrors the logic in schedule_next_prediction().
-
-    Args:
-        match_df: Full season match DataFrame
-        next_matchday_df: DataFrame of the next matchday to predict (from find_next_match_day)
-        current_date: Optional reference time; defaults to now
-
-    Returns:
-        When the next prediction job should run, or None if no next matchday
     """
     if current_date is None:
         current_date = datetime.datetime.now()
@@ -296,25 +354,21 @@ def get_next_run_time(
     current_matchday = next_matchday_df["matchDay"].iloc[0]
     current_season = next_matchday_df["season"].iloc[0]
     latest_match_start = get_latest_match_start_for_matchday(
-        match_df, current_matchday, current_season
+        match_df, current_matchday, current_season, league=league
     )
     if latest_match_start is None:
-        latest_match_start = next_matchday_df["date"].max()
-    if isinstance(latest_match_start, pd.Timestamp):
-        latest_match_start = latest_match_start.to_pydatetime()
-    elif not isinstance(latest_match_start, datetime.datetime):
-        latest_match_start = datetime.datetime.combine(
-            latest_match_start, datetime.time(20, 30)
-        )
+        latest_match_start = _to_datetime(next_matchday_df["date"].max())
+    tip_mask = _league_mask(match_df, league)
     future_matches = match_df[
-        (match_df["matchDay"] > current_matchday)
+        tip_mask
+        & (match_df["matchDay"] > current_matchday)
         & (match_df["season"] == current_season)
         & (match_df["status"] == "future")
     ]
     has_next_matchday = len(future_matches) > 0
     if not has_next_matchday or current_matchday >= 34:
         return None
-    next_job = latest_match_start + datetime.timedelta(hours=3)
+    next_job = latest_match_start + MATCHDAY_END_BUFFER
     if next_job < current_date:
         next_job = current_date + datetime.timedelta(hours=1)
     return next_job
@@ -365,8 +419,11 @@ def run_prediction_job() -> dict[str, Any]:
     """
     Run prediction, archive tips, upload, and score previous matchday.
 
+    If the next tip target is an in-progress matchday and we are still before that
+    matchday's real end (+3h), skip tip/upload/mail and only reschedule.
+
     Returns:
-        dict with logs, next_job_datetime, tips_df, performance, season_stand
+        dict with logs, next_job_datetime, tips_df, performance, season_stand, deferred
     """
     import io
     from contextlib import redirect_stdout, redirect_stderr
@@ -385,10 +442,62 @@ def run_prediction_job() -> dict[str, Any]:
     results_df: Optional[pd.DataFrame] = None
     performance: Optional[dict[str, Any]] = None
     season_stand: Optional[dict[str, Any]] = None
+    deferred = False
 
     if _is_refresh_current_season_from_api():
         logs.append("REFRESH_CURRENT_SEASON_FROM_API=1: Refreshing current season from API...")
         refresh_current_season_from_api(data_dir=DATA_DIR, verbose=True)
+        logs.append("")
+    else:
+        # Keep BL1 fixtures current (Sunday kickoffs) without wiping other leagues.
+        try:
+            logs.append("Syncing BL1 fixtures from API before tip/schedule decision...")
+            sync_season_leagues_from_api(
+                data_dir=DATA_DIR, leagues=[TIP_LEAGUE], verbose=True
+            )
+            logs.append("")
+        except Exception as e:
+            logs.append(f"WARNING: BL1 fixture sync failed: {e}")
+            logs.append("")
+
+    # Early-fire guard: in-progress matchday → reschedule to real end, no tip/mail.
+    try:
+        now = datetime.datetime.now()
+        season = get_current_season(now)
+        match_df = _load_season_match_df(season)
+        update_next_matchday_df(data_dir=DATA_DIR, current_date=now, verbose=True)
+        next_path = DATA_DIR / "next_matchday_df.pck"
+        if match_df is not None and next_path.exists():
+            next_matchday_df = pd.DataFrame(pickle.load(open(next_path, "rb")))
+            defer_to = defer_until_after_in_progress_matchday(
+                match_df, next_matchday_df, current_date=now
+            )
+            if defer_to is not None:
+                deferred = True
+                md = int(next_matchday_df["matchDay"].iloc[0])
+                msg = (
+                    f"DEFER: Spieltag {md} still in progress "
+                    f"({len(next_matchday_df)} future matches left). "
+                    f"Skipping tip/upload/mail until {defer_to.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                logs.append(msg)
+                print(msg)
+                logs.append("")
+                logs.append("=" * 60)
+                logs.append(
+                    f"Job deferred at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                logs.append("=" * 60)
+                return {
+                    "logs": "\n".join(logs),
+                    "next_job_datetime": defer_to,
+                    "tips_df": None,
+                    "performance": None,
+                    "season_stand": None,
+                    "deferred": True,
+                }
+    except Exception as e:
+        logs.append(f"WARNING: early-fire defer check failed: {e}")
         logs.append("")
 
     logs.append("Running predictions (archive tips)...")
@@ -495,6 +604,7 @@ def run_prediction_job() -> dict[str, Any]:
         "tips_df": results_df,
         "performance": performance,
         "season_stand": season_stand,
+        "deferred": deferred,
     }
 
 
@@ -502,9 +612,9 @@ def schedule_next_prediction() -> Optional[datetime.datetime]:
     """
     Schedule the next prediction job based on the matchday we just predicted for.
     
-    Uses the full season match_df to get the latest match start time of the next matchday,
-    so the job is scheduled for after the real matchday end (e.g. Sunday evening + 3h),
-    then schedules the next job for 3 hours after that match begins.
+    Uses the full season match_df (BL1) to get the latest match start time of the
+    tipped matchday, so the job is scheduled for after the real matchday end
+    (e.g. Sunday evening + 3h).
     
     Returns:
         datetime of next scheduled job, or None if not scheduled
@@ -522,6 +632,17 @@ def schedule_next_prediction() -> Optional[datetime.datetime]:
         current_date = datetime.datetime.now()
     
     try:
+        # Ensure Sunday fixtures etc. are present before computing end time.
+        try:
+            sync_season_leagues_from_api(
+                data_dir=DATA_DIR,
+                current_date=current_date,
+                leagues=[TIP_LEAGUE],
+                verbose=_is_scheduler_debug(),
+            )
+        except Exception as e:
+            print(f"WARNING: BL1 sync before schedule failed: {e}")
+
         # Load next_matchday_df to get the matchday we just predicted for
         next_matchday_path = DATA_DIR / "next_matchday_df.pck"
         
@@ -544,7 +665,7 @@ def schedule_next_prediction() -> Optional[datetime.datetime]:
             
             # Schedule for matchday_end + 3 hours
             if isinstance(matchday_end_date, datetime.datetime):
-                next_job_datetime = matchday_end_date + datetime.timedelta(hours=3)
+                next_job_datetime = matchday_end_date + MATCHDAY_END_BUFFER
             else:
                 # If it's just a date, assume evening match (20:30) + 3 hours
                 next_job_datetime = datetime.datetime.combine(
@@ -572,26 +693,19 @@ def schedule_next_prediction() -> Optional[datetime.datetime]:
             latest_match_start = None
             if match_df is not None:
                 latest_from_full = get_latest_match_start_for_matchday(
-                    match_df, current_matchday, current_season
+                    match_df, current_matchday, current_season, league=TIP_LEAGUE
                 )
                 latest_match_start = latest_from_full
             if latest_match_start is None:
-                latest_match_start = next_matchday_df["date"].max()
-            
-            # Convert to datetime if needed
-            if isinstance(latest_match_start, pd.Timestamp):
-                latest_match_start = latest_match_start.to_pydatetime()
-            elif not isinstance(latest_match_start, datetime.datetime):
-                latest_match_start = datetime.datetime.combine(
-                    latest_match_start,
-                    datetime.time(20, 30),
-                )
+                latest_match_start = _to_datetime(next_matchday_df["date"].max())
             
             # Check if there is a next matchday (Edge Case: Spieltag 34 is the last)
             has_next_matchday = False
             if match_df is not None:
+                tip_mask = _league_mask(match_df, TIP_LEAGUE)
                 future_matches = match_df[
-                    (match_df["matchDay"] > current_matchday)
+                    tip_mask
+                    & (match_df["matchDay"] > current_matchday)
                     & (match_df["season"] == current_season)
                     & (match_df["status"] == "future")
                 ]
@@ -603,7 +717,7 @@ def schedule_next_prediction() -> Optional[datetime.datetime]:
                 return None
             
             # Schedule for latest match start + 3 hours
-            next_job_datetime = latest_match_start + datetime.timedelta(hours=3)
+            next_job_datetime = latest_match_start + MATCHDAY_END_BUFFER
             
             if _is_scheduler_debug():
                 _debug_schedule(
@@ -652,6 +766,7 @@ class PredictionScheduler:
         tips_df = None
         performance = None
         season_stand = None
+        deferred = False
         try:
             result = run_prediction_job()
             logs = result["logs"]
@@ -659,6 +774,7 @@ class PredictionScheduler:
             tips_df = result.get("tips_df")
             performance = result.get("performance")
             season_stand = result.get("season_stand")
+            deferred = bool(result.get("deferred"))
         except Exception as e:
             logs = f"FATAL in prediction job: {e}\n"
             import traceback
@@ -674,6 +790,10 @@ class PredictionScheduler:
             logs += "\n\n⚠️ KEIN WEITERER JOB EINGEPLANT"
             logs += "\nDies war vermutlich der letzte Spieltag der Saison (Spieltag 34)."
             logs += "\nDie Saison ist beendet. Keine weiteren Predictions werden automatisch geplant."
+
+        if deferred:
+            print("Deferred early run — no digest email.")
+            return
 
         email_sent = _build_and_send_digest(
             logs=logs,
@@ -721,6 +841,7 @@ class PredictionScheduler:
         tips_df = None
         performance = None
         season_stand = None
+        deferred = False
         try:
             result = run_prediction_job()
             logs = result["logs"]
@@ -728,6 +849,7 @@ class PredictionScheduler:
             tips_df = result.get("tips_df")
             performance = result.get("performance")
             season_stand = result.get("season_stand")
+            deferred = bool(result.get("deferred"))
         except Exception as e:
             logs = f"FATAL in startup prediction job: {e}\n"
             import traceback
@@ -743,6 +865,11 @@ class PredictionScheduler:
             logs += "\n\n⚠️ KEIN WEITERER JOB EINGEPLANT"
             logs += "\nDies war vermutlich der letzte Spieltag der Saison (Spieltag 34)."
             logs += "\nDie Saison ist beendet. Keine weiteren Predictions werden automatisch geplant."
+
+        if deferred:
+            print("Deferred early startup run — no digest email.")
+            print("\nStartup job completed (deferred)!")
+            return
 
         email_sent = _build_and_send_digest(
             logs=logs,

@@ -15,7 +15,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 sys.path.insert(0, str(BASE_DIR / "scripts"))
 
-from scheduler import get_latest_match_start_for_matchday, get_next_run_time
+from scheduler import (
+    defer_until_after_in_progress_matchday,
+    get_latest_match_start_for_matchday,
+    get_next_run_time,
+    matchday_in_progress,
+)
 
 
 def _make_match_row(
@@ -23,12 +28,14 @@ def _make_match_row(
     season: int,
     dt: datetime.datetime,
     status: str = "future",
+    league: str = "bl1",
 ) -> dict:
     return {
         "matchDay": matchday,
         "season": season,
         "date": dt,
         "status": status,
+        "league": league,
     }
 
 
@@ -110,6 +117,97 @@ def test_get_next_run_time_past_schedules_one_hour_from_now():
     assert next_run == current + datetime.timedelta(hours=1)
 
 
+def test_bl1_latest_ignores_later_bl2_same_matchday():
+    """Kicktipp scheduling must use BL1 end, not a later BL2 kickoff."""
+    season = 2026
+    matchday = 5
+    rows = [
+        _make_match_row(
+            matchday, season, datetime.datetime(2026, 10, 10, 15, 30), league="bl1"
+        ),
+        _make_match_row(
+            matchday, season, datetime.datetime(2026, 10, 11, 17, 30), league="bl1"
+        ),
+        _make_match_row(
+            matchday, season, datetime.datetime(2026, 10, 12, 20, 30), league="bl2"
+        ),
+    ]
+    latest = get_latest_match_start_for_matchday(pd.DataFrame(rows), matchday, season)
+    assert latest == datetime.datetime(2026, 10, 11, 17, 30)
+
+
+def test_defer_saturday_partial_matchday():
+    """Saturday 18:30 with Sunday games left → defer to Sunday 20:30, no tip."""
+    season = 2026
+    matchday = 5
+    rows = [
+        _make_match_row(
+            matchday,
+            season,
+            datetime.datetime(2026, 10, 9, 20, 30),
+            status="finished",
+        ),
+        _make_match_row(
+            matchday,
+            season,
+            datetime.datetime(2026, 10, 10, 15, 30),
+            status="finished",
+        ),
+        _make_match_row(
+            matchday,
+            season,
+            datetime.datetime(2026, 10, 11, 15, 30),
+            status="future",
+        ),
+        _make_match_row(
+            matchday,
+            season,
+            datetime.datetime(2026, 10, 11, 17, 30),
+            status="future",
+        ),
+        _make_match_row(6, season, datetime.datetime(2026, 10, 18, 15, 30)),
+    ]
+    match_df = pd.DataFrame(rows)
+    assert matchday_in_progress(match_df, matchday, season)
+    next_partial = match_df[
+        (match_df["matchDay"] == matchday) & (match_df["status"] == "future")
+    ]
+    current = datetime.datetime(2026, 10, 10, 18, 30)
+    defer_to = defer_until_after_in_progress_matchday(
+        match_df, next_partial, current_date=current
+    )
+    assert defer_to == datetime.datetime(2026, 10, 11, 20, 30)
+
+
+def test_no_defer_after_matchday_end_buffer():
+    """After last kickoff + 3h, in-progress leftover must not defer forever."""
+    season = 2026
+    matchday = 5
+    rows = [
+        _make_match_row(
+            matchday,
+            season,
+            datetime.datetime(2026, 10, 11, 17, 30),
+            status="future",
+        ),
+        _make_match_row(
+            matchday,
+            season,
+            datetime.datetime(2026, 10, 10, 15, 30),
+            status="finished",
+        ),
+    ]
+    match_df = pd.DataFrame(rows)
+    next_partial = match_df[match_df["status"] == "future"]
+    current = datetime.datetime(2026, 10, 11, 20, 30)
+    assert (
+        defer_until_after_in_progress_matchday(
+            match_df, next_partial, current_date=current
+        )
+        is None
+    )
+
+
 if __name__ == "__main__":
     test_get_latest_match_start_for_matchday_returns_sunday()
     print("test_get_latest_match_start_for_matchday_returns_sunday OK")
@@ -117,4 +215,10 @@ if __name__ == "__main__":
     print("test_get_next_run_time_uses_full_matchday_not_partial OK")
     test_get_next_run_time_past_schedules_one_hour_from_now()
     print("test_get_next_run_time_past_schedules_one_hour_from_now OK")
+    test_bl1_latest_ignores_later_bl2_same_matchday()
+    print("test_bl1_latest_ignores_later_bl2_same_matchday OK")
+    test_defer_saturday_partial_matchday()
+    print("test_defer_saturday_partial_matchday OK")
+    test_no_defer_after_matchday_end_buffer()
+    print("test_no_defer_after_matchday_end_buffer OK")
     print("All scheduler timing tests passed.")

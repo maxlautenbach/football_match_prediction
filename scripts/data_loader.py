@@ -411,6 +411,72 @@ def refresh_current_season_from_api(
     update_next_matchday_df(data_dir=data_dir, current_date=current_date, verbose=verbose)
 
 
+def sync_season_leagues_from_api(
+    data_dir: Optional[Path] = None,
+    current_date: Optional[datetime.datetime] = None,
+    verbose: bool = True,
+    leagues: Optional[list[str]] = None,
+) -> None:
+    """
+    Upsert selected leagues from the API into match_df_{season}.pck.
+
+    Unlike refresh_current_season_from_api, other leagues already in the pickle
+    (e.g. bl2) are kept. Used before scheduling so newly published kickoffs
+    (Sunday fixtures) are present when computing matchday end.
+    """
+    if data_dir is None:
+        data_dir = DATA_DIR
+    if current_date is None:
+        current_date = datetime.datetime.now()
+    if leagues is None:
+        leagues = ["bl1"]
+
+    season = get_current_season(current_date)
+    league_set = {str(league).lower() for league in leagues}
+    if verbose:
+        print(
+            f"SYNC_SEASON_FROM_API: Upserting {', '.join(sorted(league_set))} "
+            f"for season {season}..."
+        )
+
+    rows: list[dict] = []
+    for league in leagues:
+        try:
+            json_list = openligadb.get_all_season_matches(league, season)
+            for match_json in json_list:
+                rows.append(extract_match_data(match_json, league=league))
+            if verbose:
+                print(f"  {league}: {len(json_list)} matches from API")
+        except Exception as e:
+            if verbose:
+                print(f"  {league}: failed - {e}")
+
+    if not rows:
+        if verbose:
+            print("  No data fetched, skipping sync.")
+        return
+
+    api_df = pd.DataFrame(rows)
+    out_file = data_dir / f"match_df_{season}.pck"
+    if out_file.exists():
+        existing = pd.DataFrame(pickle.load(open(out_file, "rb")))
+        if "league" in existing.columns:
+            keep = existing[
+                ~existing["league"].astype(str).str.lower().isin(league_set)
+            ].copy()
+        else:
+            keep = existing.iloc[0:0].copy()
+        match_df = pd.concat([keep, api_df], ignore_index=True)
+    else:
+        match_df = api_df
+
+    pickle.dump(match_df, open(out_file, "wb"))
+    if verbose:
+        print(f"  Saved {len(match_df)} matches to {out_file.name}")
+
+    update_next_matchday_df(data_dir=data_dir, current_date=current_date, verbose=verbose)
+
+
 def update_next_matchday_df(
     data_dir: Optional[Path] = None,
     current_date: Optional[datetime.datetime] = None,
