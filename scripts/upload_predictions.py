@@ -4,12 +4,20 @@ Generates predictions directly from predict.py and uploads them to the betting p
 """
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 import shutil
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _plain_team_name(raw: str) -> str:
+    """Strip HTML from Kicktipp col1 innerHTML."""
+    return _TAG_RE.sub("", raw or "").replace("\xa0", " ").strip()
 
 # Add repo root + scripts/ so both `models` and `predict` resolve
 # (script execution already puts scripts/ on path; imports need both).
@@ -22,13 +30,83 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from predict import generate_predictions
 
 
-def upload_predictions_to_platform(results_df: pd.DataFrame, auto_submit: bool = False):
+def _goal_inputs(datarow, By):
+    """Return (home, away) tip input elements from a Kicktipp datarow, or None."""
+    raw = datarow.find_elements(By.TAG_NAME, "input")
+    inputs = [
+        el
+        for el in raw
+        if (el.get_attribute("type") or "text").lower() in ("text", "number", "tel", "")
+        and (el.get_attribute("name") or "").lower() != "submitbutton"
+    ]
+    # Kicktipp rows: hidden id + home + away (sometimes only the two score fields).
+    visible = [el for el in inputs if el.is_displayed()]
+    if len(visible) >= 2:
+        return visible[0], visible[1]
+    if len(inputs) >= 3:
+        return inputs[1], inputs[2]
+    if len(inputs) >= 2:
+        return inputs[0], inputs[1]
+    return None
+
+
+def _read_tips_from_page(driver, By) -> dict[str, str]:
+    """Map Kicktipp page home-team label → 'H:A' tip currently in the form."""
+    table = driver.find_element(By.ID, "tippabgabeSpiele")
+    tips: dict[str, str] = {}
+    for datarow in table.find_elements(By.CLASS_NAME, "datarow"):
+        try:
+            home = _plain_team_name(
+                datarow.find_element(By.CLASS_NAME, "col1").get_attribute("innerHTML") or ""
+            )
+            if not home:
+                continue
+            pair = _goal_inputs(datarow, By)
+            if pair is None:
+                continue
+            home_el, away_el = pair
+            h = (home_el.get_attribute("value") or "").strip()
+            a = (away_el.get_attribute("value") or "").strip()
+            if h != "" and a != "":
+                tips[home] = f"{h}:{a}"
+        except Exception:
+            continue
+    return tips
+
+
+def _verify_tips_on_page(driver, By, results_df: pd.DataFrame, get_close_matches) -> tuple[int, list[str]]:
+    """How many predicted tips are present on the tippabgabe form."""
+    page_tips = _read_tips_from_page(driver, By)
+    ok = 0
+    missing: list[str] = []
+    for _, row in results_df.iterrows():
+        home = str(row["Home_Team"])
+        want = str(row["Prediction"]).strip()
+        matches = get_close_matches(home, list(page_tips.keys()), n=1, cutoff=0.6)
+        if not matches:
+            missing.append(f"{home} (not on page / empty)")
+            continue
+        got = page_tips[matches[0]]
+        if got == want:
+            ok += 1
+        else:
+            missing.append(f"{home}: want {want}, got {got}")
+    return ok, missing
+
+
+def upload_predictions_to_platform(results_df: pd.DataFrame, auto_submit: bool = False) -> int:
     """
     Upload predictions to betting platform using Selenium.
     
     Args:
         results_df: DataFrame with predictions
         auto_submit: Whether to automatically submit predictions
+
+    Returns:
+        Number of tips verified on Kicktipp after fill (and after submit if auto_submit).
+
+    Raises:
+        RuntimeError: if env/login/fill/submit verification fails.
     """
     try:
         from selenium import webdriver
@@ -38,6 +116,7 @@ def upload_predictions_to_platform(results_df: pd.DataFrame, auto_submit: bool =
         from selenium.common.exceptions import TimeoutException, ElementClickInterceptedException
         from difflib import get_close_matches
         import dotenv
+        import time
         
         # Load environment variables
         dotenv.load_dotenv()
@@ -47,9 +126,9 @@ def upload_predictions_to_platform(results_df: pd.DataFrame, auto_submit: bool =
         link = os.getenv("LINK-TIPPABGABE")
         
         if not all([email, password, link]):
-            print("Error: Missing environment variables (EMAIL, PASSWORT, LINK-TIPPABGABE)")
-            print("Please create a .env file in the project root with these variables.")
-            return
+            raise RuntimeError(
+                "Missing environment variables (EMAIL, PASSWORT, LINK-TIPPABGABE)"
+            )
         
         print("Starting browser...")
         from selenium.webdriver.chrome.options import Options
@@ -268,6 +347,9 @@ def upload_predictions_to_platform(results_df: pd.DataFrame, auto_submit: bool =
             
             # Navigate to prediction page
             print("Navigating to prediction page...")
+            tip_md = int(results_df["Matchday"].iloc[0]) if "Matchday" in results_df.columns else "?"
+            tip_season = int(results_df["Season"].iloc[0]) if "Season" in results_df.columns else "?"
+            print(f"Uploading tips for season {tip_season} matchday {tip_md} ({len(results_df)} matches)")
             driver.get(link)
             time.sleep(2)  # Wait for page to load
             
@@ -285,7 +367,9 @@ def upload_predictions_to_platform(results_df: pd.DataFrame, auto_submit: bool =
             for datarow in tippabgabe_tabelle.find_elements(By.CLASS_NAME, "datarow"):
                 try:
                     home_team_element = datarow.find_element(By.CLASS_NAME, "col1")
-                    home_team = home_team_element.get_attribute("innerHTML").strip()
+                    home_team = _plain_team_name(
+                        home_team_element.get_attribute("innerHTML") or ""
+                    )
                     
                     if home_team and home_team != "":
                         # Find matching team in our predictions
@@ -297,17 +381,18 @@ def upload_predictions_to_platform(results_df: pd.DataFrame, auto_submit: bool =
                             
                             if len(prediction_row) > 0:
                                 prediction = prediction_row["Prediction"].iloc[0].split(":")
-                                
-                                # Fill in the prediction
-                                inputs = datarow.find_elements(By.TAG_NAME, "input")
-                                if len(inputs) >= 3:
-                                    # Inputs[0] might be hidden, inputs[1] and inputs[2] are home/away goals
-                                    inputs[1].clear()
-                                    inputs[1].send_keys(prediction[0])
-                                    inputs[2].clear()
-                                    inputs[2].send_keys(prediction[1])
+                                pair = _goal_inputs(datarow, By)
+                                if pair is not None:
+                                    home_input, away_input = pair
+                                    home_input.clear()
+                                    home_input.send_keys(prediction[0])
+                                    away_input.clear()
+                                    away_input.send_keys(prediction[1])
                                     
-                                    print(f"  ✓ Filled: {selected_team} -> {prediction[0]}:{prediction[1]}")
+                                    print(
+                                        f"  ✓ Filled: page='{home_team}' → {selected_team} "
+                                        f"{prediction[0]}:{prediction[1]}"
+                                    )
                                     filled_count += 1
                                 else:
                                     print(f"  ⚠ Warning: Could not find input fields for {selected_team}")
@@ -318,45 +403,90 @@ def upload_predictions_to_platform(results_df: pd.DataFrame, auto_submit: bool =
                     continue
             
             print(f"\nFilled {filled_count} predictions")
+            expected = len(results_df)
+            if filled_count == 0:
+                raise RuntimeError("Filled 0 predictions — Kicktipp page/team matching failed")
+            if filled_count < expected:
+                print(
+                    f"WARNING: only filled {filled_count}/{expected} tips "
+                    "(page may show a subset or names did not match)"
+                )
+
+            pre_ok, pre_missing = _verify_tips_on_page(
+                driver, By, results_df, get_close_matches
+            )
+            print(f"Pre-submit form check: {pre_ok}/{expected} tips present in inputs")
+            if pre_ok == 0:
+                raise RuntimeError(
+                    "Form inputs empty after fill — values did not stick: "
+                    + "; ".join(pre_missing[:5])
+                )
             
             if auto_submit:
-                # Submit predictions
+                submit_button = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.NAME, "submitbutton"))
+                )
+                driver.execute_script("arguments[0].scrollIntoView(true);", submit_button)
+                time.sleep(1)
                 try:
-                    submit_button = WebDriverWait(driver, 10).until(
-                        EC.element_to_be_clickable((By.NAME, "submitbutton"))
-                    )
-                    # Scroll to button
-                    driver.execute_script("arguments[0].scrollIntoView(true);", submit_button)
-                    # Wait a bit for any animations
-                    import time
-                    time.sleep(1)
                     submit_button.click()
-                    print("Predictions submitted!")
-                except ElementClickInterceptedException:
-                    print("Warning: Submit button is blocked. Please submit manually.")
-                except Exception as e:
-                    print(f"Error submitting: {e}")
+                except ElementClickInterceptedException as e:
+                    raise RuntimeError(
+                        "Submit button blocked (cookie/overlay?) — tips not saved"
+                    ) from e
+
+                # Let Kicktipp finish the POST before we tear down Chrome.
+                time.sleep(3)
+                try:
+                    WebDriverWait(driver, 15).until(
+                        EC.presence_of_element_located((By.ID, "tippabgabeSpiele"))
+                    )
+                except TimeoutException:
+                    # Some responses navigate away briefly; reload tippabgabe.
+                    driver.get(link)
+                    WebDriverWait(driver, 15).until(
+                        EC.presence_of_element_located((By.ID, "tippabgabeSpiele"))
+                    )
+                time.sleep(1)
+
+                # Hard check: reload tippabgabe and confirm tips persisted.
+                driver.get(link)
+                WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located((By.ID, "tippabgabeSpiele"))
+                )
+                time.sleep(1)
+                post_ok, post_missing = _verify_tips_on_page(
+                    driver, By, results_df, get_close_matches
+                )
+                print(f"Post-submit verify: {post_ok}/{expected} tips persisted on Kicktipp")
+                if post_ok < max(1, expected // 2):
+                    detail = "; ".join(post_missing[:8]) or "no tip fields readable"
+                    raise RuntimeError(
+                        f"Submit click ran but Kicktipp did not keep tips "
+                        f"({post_ok}/{expected}): {detail}"
+                    )
+                print("Predictions submitted and verified!")
+                return post_ok
             else:
                 print("\nPredictions filled but not submitted.")
                 print("Review the predictions in the browser and submit manually if correct.")
                 print("Or run with --submit flag to auto-submit.")
-            
-            # Keep browser open for review
-            if not auto_submit:
                 print("\nBrowser will stay open for review. Press Enter to close...")
                 input()
+                return filled_count
         
         finally:
             driver.quit()
             print("Browser closed.")
         
-    except ImportError:
-        print("Error: Selenium or python-dotenv not installed.")
-        print("Install with: uv pip install selenium python-dotenv")
-    except Exception as e:
-        print(f"Error during upload: {e}")
-        import traceback
-        traceback.print_exc()
+    except ImportError as e:
+        raise RuntimeError(
+            "Selenium or python-dotenv not installed. "
+            "Install with: uv pip install selenium python-dotenv"
+        ) from e
+    except Exception:
+        # Ensure scheduler/CLI see real failures (do not swallow).
+        raise
 
 
 def main():
@@ -402,9 +532,10 @@ def main():
         upload_predictions_to_platform(results_df, auto_submit=args.submit)
         
     except Exception as e:
-        print(f"Error generating predictions: {e}")
+        print(f"Error during predict/upload: {e}")
         import traceback
         traceback.print_exc()
+        raise SystemExit(1) from e
 
 
 if __name__ == "__main__":

@@ -389,14 +389,21 @@ def _build_and_send_digest(
     performance: Optional[dict[str, Any]],
     season_stand: Optional[dict[str, Any]],
     startup: bool = False,
+    deferred: bool = False,
+    defer_info: Optional[dict[str, Any]] = None,
 ) -> bool:
     next_job_s = (
         next_job_datetime.strftime("%Y-%m-%d %H:%M:%S") if next_job_datetime else None
     )
+    info = dict(defer_info or {})
+    if deferred and next_job_s and not info.get("until"):
+        info["until"] = next_job_s
     subject = build_digest_subject(
         performance=performance,
         tips_df=tips_df,
         startup=startup,
+        deferred=deferred,
+        defer_info=info if deferred else None,
     )
     text_body = build_digest_text(
         performance=performance,
@@ -404,6 +411,8 @@ def _build_and_send_digest(
         tips_df=tips_df,
         next_job=next_job_s,
         ops_footer=logs,
+        deferred=deferred,
+        defer_info=info if deferred else None,
     )
     html_body = build_digest_html(
         performance=performance,
@@ -411,6 +420,8 @@ def _build_and_send_digest(
         tips_df=tips_df,
         next_job=next_job_s,
         ops_footer=logs,
+        deferred=deferred,
+        defer_info=info if deferred else None,
     )
     return send_email(subject, text_body, html_body=html_body)
 
@@ -460,7 +471,8 @@ def run_prediction_job() -> dict[str, Any]:
             logs.append(f"WARNING: BL1 fixture sync failed: {e}")
             logs.append("")
 
-    # Early-fire guard: in-progress matchday → reschedule to real end, no tip/mail.
+    # Early-fire guard: in-progress matchday → reschedule to real end, no tip/upload.
+    defer_info: Optional[dict[str, Any]] = None
     try:
         now = datetime.datetime.now()
         season = get_current_season(now)
@@ -475,10 +487,17 @@ def run_prediction_job() -> dict[str, Any]:
             if defer_to is not None:
                 deferred = True
                 md = int(next_matchday_df["matchDay"].iloc[0])
+                remaining = int(len(next_matchday_df))
+                until_s = defer_to.strftime("%Y-%m-%d %H:%M:%S")
+                defer_info = {
+                    "matchday": md,
+                    "remaining_matches": remaining,
+                    "until": until_s,
+                }
                 msg = (
                     f"DEFER: Spieltag {md} still in progress "
-                    f"({len(next_matchday_df)} future matches left). "
-                    f"Skipping tip/upload/mail until {defer_to.strftime('%Y-%m-%d %H:%M:%S')}"
+                    f"({remaining} future matches left). "
+                    f"Skipping tip/upload until {until_s}"
                 )
                 logs.append(msg)
                 print(msg)
@@ -495,6 +514,7 @@ def run_prediction_job() -> dict[str, Any]:
                     "performance": None,
                     "season_stand": None,
                     "deferred": True,
+                    "defer_info": defer_info,
                 }
     except Exception as e:
         logs.append(f"WARNING: early-fire defer check failed: {e}")
@@ -605,6 +625,7 @@ def run_prediction_job() -> dict[str, Any]:
         "performance": performance,
         "season_stand": season_stand,
         "deferred": deferred,
+        "defer_info": defer_info,
     }
 
 
@@ -842,6 +863,7 @@ class PredictionScheduler:
         performance = None
         season_stand = None
         deferred = False
+        defer_info = None
         try:
             result = run_prediction_job()
             logs = result["logs"]
@@ -850,6 +872,7 @@ class PredictionScheduler:
             performance = result.get("performance")
             season_stand = result.get("season_stand")
             deferred = bool(result.get("deferred"))
+            defer_info = result.get("defer_info")
         except Exception as e:
             logs = f"FATAL in startup prediction job: {e}\n"
             import traceback
@@ -866,11 +889,6 @@ class PredictionScheduler:
             logs += "\nDies war vermutlich der letzte Spieltag der Saison (Spieltag 34)."
             logs += "\nDie Saison ist beendet. Keine weiteren Predictions werden automatisch geplant."
 
-        if deferred:
-            print("Deferred early startup run — no digest email.")
-            print("\nStartup job completed (deferred)!")
-            return
-
         email_sent = _build_and_send_digest(
             logs=logs,
             next_job_datetime=next_job_datetime,
@@ -878,11 +896,13 @@ class PredictionScheduler:
             performance=performance,
             season_stand=season_stand,
             startup=True,
+            deferred=deferred,
+            defer_info=defer_info,
         )
         if not email_sent:
             print("WARNING: Email could not be sent. Check SMTP configuration.")
 
-        print("\nStartup job completed!")
+        print("\nStartup job completed!" + (" (deferred)" if deferred else ""))
 
     def schedule_only_on_startup(self):
         """Schedule the next job without tipping (useful on redeploy)."""

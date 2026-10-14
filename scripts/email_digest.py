@@ -47,9 +47,17 @@ def build_digest_subject(
     performance: Optional[dict[str, Any]] = None,
     tips_df: Optional[pd.DataFrame] = None,
     startup: bool = False,
+    deferred: bool = False,
+    defer_info: Optional[dict[str, Any]] = None,
 ) -> str:
     prefix = "Startup · " if startup else ""
     parts: list[str] = []
+    if deferred:
+        md = (defer_info or {}).get("matchday")
+        if md is not None:
+            parts.append(f"Verschoben (ST {md} läuft noch)")
+        else:
+            parts.append("Verschoben (Spieltag läuft noch)")
     if performance and performance.get("n_scored", 0) > 0:
         md = performance["matchday"]
         pts = performance["points"]
@@ -64,6 +72,25 @@ def build_digest_subject(
     return f"[Kicktipp] {prefix}{' · '.join(parts)}"
 
 
+def _defer_lines(defer_info: Optional[dict[str, Any]], next_job: Optional[str]) -> list[str]:
+    info = defer_info or {}
+    md = info.get("matchday")
+    remaining = info.get("remaining_matches")
+    until = info.get("until") or next_job
+    lines = [
+        "Tipp übersprungen — Spieltag noch nicht zu Ende.",
+        "Kein Upload, keine neuen Tipps. Nächster Lauf nach echtem Spieltag-Ende (+3h).",
+    ]
+    if md is not None:
+        extra = f"Spieltag {md}"
+        if remaining is not None:
+            extra += f": noch {remaining} offene Spiele"
+        lines.append(extra)
+    if until:
+        lines.append(f"Nächster Job: {until}")
+    return lines
+
+
 def build_digest_text(
     *,
     performance: Optional[dict[str, Any]] = None,
@@ -71,10 +98,18 @@ def build_digest_text(
     tips_df: Optional[pd.DataFrame] = None,
     next_job: Optional[str] = None,
     ops_footer: Optional[str] = None,
+    deferred: bool = False,
+    defer_info: Optional[dict[str, Any]] = None,
 ) -> str:
     lines: list[str] = []
     lines.append("Football Match Prediction — Digest")
     lines.append("=" * 48)
+
+    if deferred:
+        lines.append("")
+        lines.append("Verschoben")
+        lines.append("-" * 48)
+        lines.extend(_defer_lines(defer_info, next_job))
 
     if performance and performance.get("n_scored", 0) > 0:
         lines.append("")
@@ -143,7 +178,7 @@ def build_digest_text(
         if n_exp:
             lines.append(f"Σ E[Pts] Spieltag: {total_exp:.1f}")
 
-    if next_job:
+    if next_job and not deferred:
         lines.append("")
         lines.append(f"Nächster Job: {next_job}")
 
@@ -168,10 +203,13 @@ def build_digest_html(
     tips_df: Optional[pd.DataFrame] = None,
     next_job: Optional[str] = None,
     ops_footer: Optional[str] = None,
+    deferred: bool = False,
+    defer_info: Optional[dict[str, Any]] = None,
 ) -> str:
     sections: list[str] = []
+    header_title = "Startup — verschoben" if deferred else "Matchday Digest"
     sections.append(
-        """
+        f"""
 <!DOCTYPE html>
 <html lang="de">
 <head>
@@ -185,10 +223,41 @@ def build_digest_html(
 <table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e5e7eb;">
 <tr><td style="padding:20px 24px;background:#0f172a;color:#f8fafc;">
   <div style="font-size:13px;letter-spacing:0.04em;text-transform:uppercase;opacity:0.75;">Kicktipp</div>
-  <div style="font-size:22px;font-weight:600;margin-top:4px;">Matchday Digest</div>
+  <div style="font-size:22px;font-weight:600;margin-top:4px;">{_esc(header_title)}</div>
 </td></tr>
 """
     )
+
+    if deferred:
+        info = defer_info or {}
+        md = info.get("matchday")
+        remaining = info.get("remaining_matches")
+        until = info.get("until") or next_job or "—"
+        detail = "Spieltag läuft noch — kein Tipp/Upload in diesem Lauf."
+        if md is not None and remaining is not None:
+            detail = (
+                f"Spieltag {md} läuft noch ({remaining} offene Spiele) — "
+                "kein Tipp/Upload in diesem Lauf."
+            )
+        elif md is not None:
+            detail = f"Spieltag {md} läuft noch — kein Tipp/Upload in diesem Lauf."
+        sections.append(
+            f"""
+<tr><td style="padding:20px 24px 8px 24px;">
+  <div style="font-size:16px;font-weight:600;">Verschoben auf Spieltag-Ende</div>
+  <div style="font-size:13px;color:#64748b;margin-top:6px;line-height:1.5;">{_esc(detail)}</div>
+</td></tr>
+<tr><td style="padding:8px 24px 20px 24px;">
+  <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:14px 16px;">
+    <div style="font-size:11px;color:#92400e;text-transform:uppercase;letter-spacing:0.04em;">Nächster Job</div>
+    <div style="font-size:18px;font-weight:700;margin-top:4px;color:#78350f;">{_esc(until)}</div>
+    <div style="font-size:13px;color:#92400e;margin-top:6px;">
+      Dann Tipps für den nächsten Spieltag (+ Auswertung, sobald möglich).
+    </div>
+  </div>
+</td></tr>
+"""
+        )
 
     if performance and performance.get("n_scored", 0) > 0:
         z = performance.get("z_score")
@@ -328,7 +397,7 @@ def build_digest_html(
 """
         )
 
-    if next_job:
+    if next_job and not deferred:
         sections.append(
             f"""
 <tr><td style="padding:8px 24px 20px 24px;font-size:13px;color:#64748b;">
